@@ -17,21 +17,16 @@
 import {
   context,
   TraceFlags,
-  setActiveSpan,
-  setExtractedSpanContext,
+  propagation, trace,
 } from '@opentelemetry/api';
-import {
-  AlwaysOnSampler,
-  AlwaysOffSampler,
-  NoopLogger,
-  NoRecordingSpan,
-} from '@opentelemetry/core';
+import { AlwaysOnSampler, AlwaysOffSampler } from '@opentelemetry/core';
 import { AsyncHooksContextManager } from '@opentelemetry/context-async-hooks';
 import { Span } from '@opentelemetry/tracing';
-import { Resource, TELEMETRY_SDK_RESOURCE } from '@opentelemetry/resources';
+import { Resource } from '@opentelemetry/resources';
+import { ResourceAttributes } from '@opentelemetry/semantic-conventions';
 import * as assert from 'assert';
 import * as path from 'path';
-import { ContextManager, ROOT_CONTEXT } from '@opentelemetry/context-base';
+import { ContextManager, ROOT_CONTEXT } from '@opentelemetry/api';
 import { NodeTracerProvider } from '../src/NodeTracerProvider';
 
 const sleep = (time: number) =>
@@ -60,7 +55,6 @@ describe('NodeTracerProvider', () => {
   afterEach(() => {
     // clear require cache
     Object.keys(require.cache).forEach(key => delete require.cache[key]);
-    provider.stop();
     contextManager.disable();
     context.disable();
   });
@@ -72,9 +66,7 @@ describe('NodeTracerProvider', () => {
     });
 
     it('should construct an instance with logger', () => {
-      provider = new NodeTracerProvider({
-        logger: new NoopLogger(),
-      });
+      provider = new NodeTracerProvider();
       assert.ok(provider instanceof NodeTracerProvider);
     });
 
@@ -84,55 +76,17 @@ describe('NodeTracerProvider', () => {
       });
       assert.ok(provider instanceof NodeTracerProvider);
     });
-
-    it('should load a merge of user configured and default plugins and implictly enable non-default plugins', () => {
-      provider = new NodeTracerProvider({
-        logger: new NoopLogger(),
-        plugins: {
-          'simple-module': {
-            path: '@opentelemetry/plugin-simple-module',
-          },
-          'supported-module': {
-            path: '@opentelemetry/plugin-supported-module',
-            enhancedDatabaseReporting: false,
-            ignoreMethods: [],
-            ignoreUrls: [],
-          },
-          'random-module': {
-            enabled: false,
-            path: '@opentelemetry/random-module',
-          },
-          http: {
-            path: '@opentelemetry/plugin-http-module',
-          },
-        },
-      });
-      const plugins = provider['_pluginLoader']['_plugins'];
-      assert.strictEqual(plugins.length, 0);
-      require('simple-module');
-      assert.strictEqual(plugins.length, 1);
-      require('supported-module');
-      assert.strictEqual(plugins.length, 2);
-      require('random-module');
-      assert.strictEqual(plugins.length, 2);
-      require('http');
-      assert.strictEqual(plugins.length, 3);
-    });
   });
 
   describe('.startSpan()', () => {
     it('should start a span with name only', () => {
-      provider = new NodeTracerProvider({
-        logger: new NoopLogger(),
-      });
+      provider = new NodeTracerProvider();
       const span = provider.getTracer('default').startSpan('my-span');
       assert.ok(span);
     });
 
     it('should start a span with name and options', () => {
-      provider = new NodeTracerProvider({
-        logger: new NoopLogger(),
-      });
+      provider = new NodeTracerProvider();
       const span = provider.getTracer('default').startSpan('my-span', {});
       assert.ok(span);
     });
@@ -140,35 +94,31 @@ describe('NodeTracerProvider', () => {
     it('should return a default span with no sampling (AlwaysOffSampler)', () => {
       provider = new NodeTracerProvider({
         sampler: new AlwaysOffSampler(),
-        logger: new NoopLogger(),
       });
       const span = provider.getTracer('default').startSpan('my-span');
-      assert.ok(span instanceof NoRecordingSpan);
-      assert.strictEqual(span.context().traceFlags, TraceFlags.NONE);
+      assert.strictEqual(span.spanContext().traceFlags, TraceFlags.NONE);
       assert.strictEqual(span.isRecording(), false);
     });
 
     it('should start a recording span with always sampling (AlwaysOnSampler)', () => {
       provider = new NodeTracerProvider({
         sampler: new AlwaysOnSampler(),
-        logger: new NoopLogger(),
       });
       const span = provider.getTracer('default').startSpan('my-span');
       assert.ok(span instanceof Span);
-      assert.strictEqual(span.context().traceFlags, TraceFlags.SAMPLED);
+      assert.strictEqual(span.spanContext().traceFlags, TraceFlags.SAMPLED);
       assert.strictEqual(span.isRecording(), true);
     });
 
     it('should sample with AlwaysOnSampler if parent was not sampled', () => {
       provider = new NodeTracerProvider({
         sampler: new AlwaysOnSampler(),
-        logger: new NoopLogger(),
       });
 
       const sampledParent = provider.getTracer('default').startSpan(
         'not-sampled-span',
         {},
-        setExtractedSpanContext(ROOT_CONTEXT, {
+        trace.setSpanContext(ROOT_CONTEXT, {
           traceId: 'd4cda95b652f4a1592b449d5929fda1b',
           spanId: '6e0c63257de34c92',
           traceFlags: TraceFlags.NONE,
@@ -176,43 +126,27 @@ describe('NodeTracerProvider', () => {
       );
       assert.ok(sampledParent instanceof Span);
       assert.strictEqual(
-        sampledParent.context().traceFlags,
+        sampledParent.spanContext().traceFlags,
         TraceFlags.SAMPLED
       );
       assert.strictEqual(sampledParent.isRecording(), true);
 
       const span = provider
         .getTracer('default')
-        .startSpan(
-          'child-span',
-          {},
-          setActiveSpan(ROOT_CONTEXT, sampledParent)
-        );
+        .startSpan('child-span', {}, trace.setSpan(ROOT_CONTEXT, sampledParent));
       assert.ok(span instanceof Span);
-      assert.strictEqual(span.context().traceFlags, TraceFlags.SAMPLED);
+      assert.strictEqual(span.spanContext().traceFlags, TraceFlags.SAMPLED);
       assert.strictEqual(span.isRecording(), true);
     });
 
     it('should assign resource to span', () => {
-      provider = new NodeTracerProvider({
-        logger: new NoopLogger(),
-      });
+      provider = new NodeTracerProvider();
       const span = provider.getTracer('default').startSpan('my-span') as Span;
       assert.ok(span);
       assert.ok(span.resource instanceof Resource);
       assert.equal(
-        span.resource.attributes[TELEMETRY_SDK_RESOURCE.LANGUAGE],
+        span.resource.attributes[ResourceAttributes.TELEMETRY_SDK_LANGUAGE],
         'nodejs'
-      );
-    });
-  });
-
-  describe('.getCurrentSpan()', () => {
-    it('should return undefined with AsyncHooksContextManager when no span started', () => {
-      provider = new NodeTracerProvider({});
-      assert.deepStrictEqual(
-        provider.getTracer('default').getCurrentSpan(),
-        undefined
       );
     });
   });
@@ -221,67 +155,46 @@ describe('NodeTracerProvider', () => {
     it('should run context with AsyncHooksContextManager context manager', done => {
       provider = new NodeTracerProvider({});
       const span = provider.getTracer('default').startSpan('my-span');
-      provider.getTracer('default').withSpan(span, () => {
-        assert.deepStrictEqual(
-          provider.getTracer('default').getCurrentSpan(),
-          span
-        );
+      context.with(trace.setSpan(context.active(), span), () => {
+        assert.deepStrictEqual(trace.getSpan(context.active()), span);
         return done();
       });
-      assert.deepStrictEqual(
-        provider.getTracer('default').getCurrentSpan(),
-        undefined
-      );
+      assert.deepStrictEqual(trace.getSpan(context.active()), undefined);
     });
 
     it('should run context with AsyncHooksContextManager context manager with multiple spans', done => {
       provider = new NodeTracerProvider({});
       const span = provider.getTracer('default').startSpan('my-span');
-      provider.getTracer('default').withSpan(span, () => {
-        assert.deepStrictEqual(
-          provider.getTracer('default').getCurrentSpan(),
-          span
-        );
+      context.with(trace.setSpan(context.active(), span), () => {
+        assert.deepStrictEqual(trace.getSpan(context.active()), span);
 
         const span1 = provider.getTracer('default').startSpan('my-span1');
 
-        provider.getTracer('default').withSpan(span1, () => {
+        context.with(trace.setSpan(context.active(), span1), () => {
+          assert.deepStrictEqual(trace.getSpan(context.active()), span1);
           assert.deepStrictEqual(
-            provider.getTracer('default').getCurrentSpan(),
-            span1
-          );
-          assert.deepStrictEqual(
-            span1.context().traceId,
-            span.context().traceId
+            span1.spanContext().traceId,
+            span.spanContext().traceId
           );
           return done();
         });
       });
       // when span ended.
       // @todo: below check is not running.
-      assert.deepStrictEqual(
-        provider.getTracer('default').getCurrentSpan(),
-        undefined
-      );
+      assert.deepStrictEqual(trace.getSpan(context.active()), undefined);
     });
 
     it('should find correct context with promises', async () => {
       provider = new NodeTracerProvider();
       const span = provider.getTracer('default').startSpan('my-span');
-      await provider.getTracer('default').withSpan(span, async () => {
+      await context.with(trace.setSpan(context.active(), span), async () => {
         for (let i = 0; i < 3; i++) {
           await sleep(5).then(() => {
-            assert.deepStrictEqual(
-              provider.getTracer('default').getCurrentSpan(),
-              span
-            );
+            assert.deepStrictEqual(trace.getSpan(context.active()), span);
           });
         }
       });
-      assert.deepStrictEqual(
-        provider.getTracer('default').getCurrentSpan(),
-        undefined
-      );
+      assert.deepStrictEqual(trace.getSpan(context.active()), undefined);
     });
   });
 
@@ -290,63 +203,44 @@ describe('NodeTracerProvider', () => {
       const provider = new NodeTracerProvider({});
       const span = provider.getTracer('default').startSpan('my-span');
       const fn = () => {
-        assert.deepStrictEqual(
-          provider.getTracer('default').getCurrentSpan(),
-          span
-        );
+        assert.deepStrictEqual(trace.getSpan(context.active()), span);
         return done();
       };
-      const patchedFn = context.bind(fn, setActiveSpan(context.active(), span));
+      const patchedFn = context.bind(fn, trace.setSpan(context.active(), span));
       return patchedFn();
     });
   });
-});
 
-describe('mergePlugins', () => {
-  const defaultPlugins = {
-    module1: {
-      enabled: true,
-      path: 'testpath',
-    },
-    module2: {
-      enabled: true,
-      path: 'testpath2',
-    },
-    module3: {
-      enabled: true,
-      path: 'testpath3',
-    },
-  };
+  describe('.register()', () => {
+    let originalPropagators: string | number | undefined | string[];
+    beforeEach(() => {
+      originalPropagators = process.env.OTEL_PROPAGATORS;
+    });
 
-  const userPlugins = {
-    module2: {
-      path: 'userpath',
-    },
-    module3: {
-      enabled: false,
-    },
-    nonDefaultModule: {
-      path: 'userpath2',
-    },
-  };
+    afterEach(() => {
+      // otherwise we may assign 'undefined' (a string)
+      if (originalPropagators !== undefined) {
+        (process.env as any).OTEL_PROPAGATORS = originalPropagators;
+      } else {
+        delete (process.env as any).OTEL_PROPAGATORS;
+      }
+    });
 
-  const provider = new NodeTracerProvider();
+    it('should allow propagators as per the specification', () => {
+      (process.env as any).OTEL_PROPAGATORS = 'b3,b3multi,jaeger';
 
-  const mergedPlugins = provider['_mergePlugins'](defaultPlugins, userPlugins);
+      const provider = new NodeTracerProvider();
+      provider.register();
 
-  it('should merge user and default configs', () => {
-    assert.equal(mergedPlugins.module1.enabled, true);
-    assert.equal(mergedPlugins.module1.path, 'testpath');
-    assert.equal(mergedPlugins.module2.enabled, true);
-    assert.equal(mergedPlugins.module2.path, 'userpath');
-    assert.equal(mergedPlugins.module3.enabled, false);
-    assert.equal(mergedPlugins.nonDefaultModule.enabled, true);
-    assert.equal(mergedPlugins.nonDefaultModule.path, 'userpath2');
-  });
-
-  it('should should not mangle default config', () => {
-    assert.equal(defaultPlugins.module2.path, 'testpath2');
-    assert.equal(defaultPlugins.module3.enabled, true);
-    assert.equal(defaultPlugins.module3.path, 'testpath3');
+      assert.deepStrictEqual(propagation.fields(), [
+        'b3',
+        'x-b3-traceid',
+        'x-b3-spanid',
+        'x-b3-flags',
+        'x-b3-sampled',
+        'x-b3-parentspanid',
+        'uber-trace-id',
+      ]);
+    });
   });
 });

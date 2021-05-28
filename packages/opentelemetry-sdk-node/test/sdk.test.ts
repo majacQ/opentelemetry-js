@@ -14,41 +14,35 @@
  * limitations under the License.
  */
 
-import * as nock from 'nock';
-import * as semver from 'semver';
 import {
   context,
-  metrics,
-  NoopTextMapPropagator,
-  NoopMeterProvider,
-  NoopTracerProvider,
   propagation,
-  trace,
   ProxyTracerProvider,
+  trace,
+  diag,
+  DiagLogLevel,
 } from '@opentelemetry/api';
+import { metrics, NoopMeterProvider } from '@opentelemetry/api-metrics';
 import {
   AsyncHooksContextManager,
   AsyncLocalStorageContextManager,
 } from '@opentelemetry/context-async-hooks';
-import { NoopContextManager } from '@opentelemetry/context-base';
 import { CompositePropagator } from '@opentelemetry/core';
 import { ConsoleMetricExporter, MeterProvider } from '@opentelemetry/metrics';
 import { NodeTracerProvider } from '@opentelemetry/node';
+import { awsEc2Detector } from '@opentelemetry/resource-detector-aws';
+import { resetIsAvailableCache } from '@opentelemetry/resource-detector-gcp';
+import { Resource } from '@opentelemetry/resources';
+import {
+  assertCloudResource,
+  assertHostResource,
+  assertServiceResource,
+} from '@opentelemetry/resources/build/test/util/resource-assertions';
 import {
   ConsoleSpanExporter,
   SimpleSpanProcessor,
 } from '@opentelemetry/tracing';
 import * as assert from 'assert';
-import { NodeSDK } from '../src';
-import * as NodeConfig from '@opentelemetry/node/build/src/config';
-import * as Sinon from 'sinon';
-import { awsEc2Detector } from '@opentelemetry/resource-detector-aws';
-import { resetIsAvailableCache } from '@opentelemetry/resource-detector-gcp';
-import {
-  assertServiceResource,
-  assertCloudResource,
-  assertHostResource,
-} from '@opentelemetry/resources/test/util/resource-assertions';
 import {
   BASE_PATH,
   HEADER_NAME,
@@ -56,7 +50,10 @@ import {
   HOST_ADDRESS,
   SECONDARY_HOST_ADDRESS,
 } from 'gcp-metadata';
-import { Resource } from '@opentelemetry/resources';
+import * as nock from 'nock';
+import * as semver from 'semver';
+import * as Sinon from 'sinon';
+import { NodeSDK } from '../src';
 
 const HEADERS = {
   [HEADER_NAME.toLowerCase()]: HEADER_VALUE,
@@ -89,9 +86,11 @@ const DefaultContextManager = semver.gte(process.version, '14.8.0')
   : AsyncHooksContextManager;
 
 describe('Node SDK', () => {
+  let ctxManager: any;
+  let propagator: any;
+  let delegate: any;
+
   before(() => {
-    // Disable attempted load of default plugins
-    Sinon.replace(NodeConfig, 'DEFAULT_INSTRUMENTATION_PLUGINS', {});
     nock.disableNetConnect();
   });
 
@@ -100,6 +99,10 @@ describe('Node SDK', () => {
     trace.disable();
     propagation.disable();
     metrics.disable();
+
+    ctxManager = context['_getContextManager']();
+    propagator = propagation['_getGlobalPropagator']();
+    delegate = (trace.getTracerProvider() as ProxyTracerProvider).getDelegate();
   });
 
   describe('Basic Registration', () => {
@@ -110,15 +113,9 @@ describe('Node SDK', () => {
 
       await sdk.start();
 
-      assert.ok(context['_getContextManager']() instanceof NoopContextManager);
-      assert.ok(
-        propagation['_getGlobalPropagator']() instanceof NoopTextMapPropagator
-      );
-
-      const apiTracerProvider = trace.getTracerProvider();
-      console.log(apiTracerProvider);
-      assert.ok(apiTracerProvider instanceof ProxyTracerProvider);
-      assert.ok(apiTracerProvider.getDelegate() instanceof NoopTracerProvider);
+      assert.strictEqual(context['_getContextManager'](), ctxManager, "context manager should not change");
+      assert.strictEqual(propagation['_getGlobalPropagator'](), propagator, "propagator should not change");
+      assert.strictEqual((trace.getTracerProvider() as ProxyTracerProvider).getDelegate(), delegate, "tracer provider should not have changed");
 
       assert.ok(metrics.getMeterProvider() instanceof NoopMeterProvider);
     });
@@ -139,8 +136,7 @@ describe('Node SDK', () => {
       assert.ok(
         propagation['_getGlobalPropagator']() instanceof CompositePropagator
       );
-      const apiTracerProvider = trace.getTracerProvider();
-      assert.ok(apiTracerProvider instanceof ProxyTracerProvider);
+      const apiTracerProvider = trace.getTracerProvider() as ProxyTracerProvider;
       assert.ok(apiTracerProvider.getDelegate() instanceof NodeTracerProvider);
     });
 
@@ -163,8 +159,7 @@ describe('Node SDK', () => {
       assert.ok(
         propagation['_getGlobalPropagator']() instanceof CompositePropagator
       );
-      const apiTracerProvider = trace.getTracerProvider();
-      assert.ok(apiTracerProvider instanceof ProxyTracerProvider);
+      const apiTracerProvider = trace.getTracerProvider() as ProxyTracerProvider;
       assert.ok(apiTracerProvider.getDelegate() instanceof NodeTracerProvider);
     });
 
@@ -178,14 +173,9 @@ describe('Node SDK', () => {
 
       await sdk.start();
 
-      assert.ok(context['_getContextManager']() instanceof NoopContextManager);
-      assert.ok(
-        propagation['_getGlobalPropagator']() instanceof NoopTextMapPropagator
-      );
-
-      const apiTracerProvider = trace.getTracerProvider();
-      assert.ok(apiTracerProvider instanceof ProxyTracerProvider);
-      assert.ok(apiTracerProvider.getDelegate() instanceof NoopTracerProvider);
+      assert.strictEqual(context['_getContextManager'](), ctxManager, "context manager should not change");
+      assert.strictEqual(propagation['_getGlobalPropagator'](), propagator, "propagator should not change");
+      assert.strictEqual((trace.getTracerProvider() as ProxyTracerProvider).getDelegate(), delegate, "tracer provider should not have changed");
 
       assert.ok(metrics.getMeterProvider() instanceof MeterProvider);
     });
@@ -354,7 +344,7 @@ describe('Node SDK', () => {
         regex: RegExp
       ): boolean => {
         return mockedFunction.getCalls().some(call => {
-          return regex.test(call.args.toString());
+          return call.args.some(callArgs => regex.test(callArgs.toString()));
         });
       };
 
@@ -362,16 +352,19 @@ describe('Node SDK', () => {
         const sdk = new NodeSDK({
           autoDetectResources: true,
         });
+
         // This test depends on the env detector to be functioning as intended
         const mockedLoggerMethod = Sinon.fake();
-        await sdk.detectResources({
-          logger: {
+        const mockedVerboseLoggerMethod = Sinon.fake();
+        diag.setLogger(
+          {
             debug: mockedLoggerMethod,
-            info: Sinon.fake(),
-            warn: Sinon.fake(),
-            error: Sinon.fake(),
-          },
-        });
+            verbose: mockedVerboseLoggerMethod,
+          } as any,
+          DiagLogLevel.VERBOSE
+        );
+
+        await sdk.detectResources();
 
         // Test for AWS and GCP Detector failure
         assert.ok(
@@ -393,7 +386,7 @@ describe('Node SDK', () => {
         // Regex formatting accounts for whitespace variations in util.inspect output over different node versions
         assert.ok(
           callArgsMatches(
-            mockedLoggerMethod,
+            mockedVerboseLoggerMethod,
             /{\s+'service\.instance\.id':\s+'627cc493',\s+'service\.name':\s+'my-service',\s+'service\.namespace':\s+'default',\s+'service\.version':\s+'0\.0\.1'\s+}\s*/
           )
         );
@@ -409,14 +402,14 @@ describe('Node SDK', () => {
             autoDetectResources: true,
           });
           const mockedLoggerMethod = Sinon.fake();
-          await sdk.detectResources({
-            logger: {
+          diag.setLogger(
+            {
               debug: mockedLoggerMethod,
-              info: Sinon.fake(),
-              warn: Sinon.fake(),
-              error: Sinon.fake(),
-            },
-          });
+            } as any,
+            DiagLogLevel.DEBUG
+          );
+
+          await sdk.detectResources();
 
           assert.ok(
             callArgsContains(
@@ -437,14 +430,14 @@ describe('Node SDK', () => {
             autoDetectResources: true,
           });
           const mockedLoggerMethod = Sinon.fake();
-          await sdk.detectResources({
-            logger: {
+          diag.setLogger(
+            {
               debug: mockedLoggerMethod,
-              info: Sinon.fake(),
-              warn: Sinon.fake(),
-              error: Sinon.fake(),
-            },
-          });
+            } as any,
+            DiagLogLevel.DEBUG
+          );
+
+          await sdk.detectResources();
 
           assert.ok(
             callArgsContains(

@@ -19,10 +19,8 @@ import * as path from 'path';
 import * as RequireInTheMiddle from 'require-in-the-middle';
 import * as semver from 'semver';
 import { InstrumentationAbstract } from '../../instrumentation';
-import {
-  InstrumentationModuleDefinition,
-  InstrumentationModuleFile,
-} from './types';
+import { InstrumentationModuleDefinition } from './types';
+import { diag } from '@opentelemetry/api';
 
 /**
  * Base abstract class for instrumenting node plugins
@@ -50,7 +48,7 @@ export abstract class InstrumentationBase<T = any>
     this._modules = (modules as InstrumentationModuleDefinition<T>[]) || [];
 
     if (this._modules.length === 0) {
-      this._logger.warn(
+      diag.warn(
         'No modules instrumentation has been defined,' +
           ' nothing will be patched'
       );
@@ -59,24 +57,6 @@ export abstract class InstrumentationBase<T = any>
     if (this._config.enabled) {
       this.enable();
     }
-  }
-
-  private _isSupported(name: string, version: string): boolean {
-    for (const module of this._modules) {
-      if (module.name === name) {
-        if (!module.supportedVersions) {
-          return true;
-        }
-
-        for (const supportedVersions of module.supportedVersions) {
-          if (semver.satisfies(version, supportedVersions)) {
-            return true;
-          }
-        }
-      }
-    }
-
-    return false;
   }
 
   private _onRequire<T>(
@@ -93,27 +73,30 @@ export abstract class InstrumentationBase<T = any>
       return exports;
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const version = require(path.join(baseDir, 'package.json')).version;
+    module.moduleVersion = version;
     if (module.name === name) {
       // main module
-      const version = require(path.join(baseDir, 'package.json')).version;
-      if (typeof version === 'string' && this._isSupported(name, version)) {
+      if (
+        typeof version === 'string' &&
+        isSupported(module.supportedVersions, version)
+      ) {
         if (typeof module.patch === 'function') {
           module.moduleExports = exports;
           if (this._enabled) {
-            return module.patch(exports);
+            return module.patch(exports, module.moduleVersion);
           }
         }
       }
     } else {
       // internal file
-      const files = module.files || [];
-      const file = files.find(
-        (file: InstrumentationModuleFile<T>) => file.name === name
-      );
-      if (file) {
+      const files = module.files ?? [];
+      const file = files.find(file => file.name === name);
+      if (file && isSupported(file.supportedVersions, version)) {
         file.moduleExports = exports;
         if (this._enabled) {
-          return file.patch(exports);
+          return file.patch(exports, module.moduleVersion);
         }
       }
     }
@@ -130,11 +113,11 @@ export abstract class InstrumentationBase<T = any>
     if (this._hooks.length > 0) {
       for (const module of this._modules) {
         if (typeof module.patch === 'function' && module.moduleExports) {
-          module.patch(module.moduleExports);
+          module.patch(module.moduleExports, module.moduleVersion);
         }
         for (const file of module.files) {
           if (file.moduleExports) {
-            file.patch(file.moduleExports);
+            file.patch(file.moduleExports, module.moduleVersion);
           }
         }
       }
@@ -169,13 +152,23 @@ export abstract class InstrumentationBase<T = any>
 
     for (const module of this._modules) {
       if (typeof module.unpatch === 'function' && module.moduleExports) {
-        module.unpatch(module.moduleExports);
+        module.unpatch(module.moduleExports, module.moduleVersion);
       }
       for (const file of module.files) {
         if (file.moduleExports) {
-          file.unpatch(file.moduleExports);
+          file.unpatch(file.moduleExports, module.moduleVersion);
         }
       }
     }
   }
+
+  public isEnabled() {
+    return this._enabled;
+  }
+}
+
+function isSupported(supportedVersions: string[], version: string): boolean {
+  return supportedVersions.some(supportedVersion => {
+    return semver.satisfies(version, supportedVersion);
+  });
 }

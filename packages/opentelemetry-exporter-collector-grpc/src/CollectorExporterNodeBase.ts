@@ -14,11 +14,12 @@
  * limitations under the License.
  */
 
+import { diag } from '@opentelemetry/api';
 import {
   CollectorExporterBase,
   collectorTypes,
 } from '@opentelemetry/exporter-collector';
-import type { Metadata } from 'grpc';
+import type { Metadata } from '@grpc/grpc-js';
 import {
   CollectorExporterConfigNode,
   GRPCQueueItem,
@@ -45,7 +46,7 @@ export abstract class CollectorExporterNodeBase<
   constructor(config: CollectorExporterConfigNode = {}) {
     super(config);
     if (config.headers) {
-      this.logger.warn('Headers cannot be set when using grpc');
+      diag.warn('Headers cannot be set when using grpc');
     }
     this.metadata = config.metadata;
   }
@@ -54,7 +55,7 @@ export abstract class CollectorExporterNodeBase<
     onSuccess: () => void,
     onError: (error: collectorTypes.CollectorExporterError) => void
   ): void {
-    const promise = new Promise(resolve => {
+    const promise = new Promise<void>(resolve => {
       const _onSuccess = (): void => {
         onSuccess();
         _onFinish();
@@ -92,7 +93,7 @@ export abstract class CollectorExporterNodeBase<
     onError: (error: collectorTypes.CollectorExporterError) => void
   ): void {
     if (this._isShutdown) {
-      this.logger.debug('Shutdown already started. Cannot send objects');
+      diag.debug('Shutdown already started. Cannot send objects');
       return;
     }
     if (!this._send) {

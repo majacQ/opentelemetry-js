@@ -16,36 +16,47 @@
 
 import {
   context,
+  trace,
   SpanContext,
   TraceFlags,
-  ContextManager,
   ROOT_CONTEXT,
-  setActiveSpan,
-  setExtractedSpanContext,
+  TextMapPropagator,
+  TextMapSetter,
+  Context,
+  TextMapGetter,
+  propagation,
+  diag,
 } from '@opentelemetry/api';
+import { CompositePropagator } from '@opentelemetry/core';
 import {
   AlwaysOnSampler,
   AlwaysOffSampler,
-  NoopLogger,
-  NoRecordingSpan,
   TraceState,
 } from '@opentelemetry/core';
 import { Resource } from '@opentelemetry/resources';
 import * as assert from 'assert';
 import * as sinon from 'sinon';
-import { BasicTracerProvider, Span } from '../src';
+import {
+  BasicTracerProvider,
+  NoopSpanProcessor,
+  Span,
+  InMemorySpanExporter,
+  SpanExporter,
+  BatchSpanProcessor,
+} from '../src';
 
 describe('BasicTracerProvider', () => {
-  let sandbox: sinon.SinonSandbox;
   let removeEvent: Function | undefined;
+  const envSource = (typeof window !== 'undefined'
+    ? window
+    : process.env) as any;
 
   beforeEach(() => {
     context.disable();
-    sandbox = sinon.createSandbox();
   });
 
   afterEach(() => {
-    sandbox.restore();
+    sinon.restore();
     if (removeEvent) {
       removeEvent();
       removeEvent = undefined;
@@ -58,13 +69,6 @@ describe('BasicTracerProvider', () => {
       assert.ok(provider instanceof BasicTracerProvider);
     });
 
-    it('should construct an instance with logger', () => {
-      const provider = new BasicTracerProvider({
-        logger: new NoopLogger(),
-      });
-      assert.ok(provider instanceof BasicTracerProvider);
-    });
-
     it('should construct an instance with sampler', () => {
       const provider = new BasicTracerProvider({
         sampler: new AlwaysOnSampler(),
@@ -72,57 +76,189 @@ describe('BasicTracerProvider', () => {
       assert.ok(provider instanceof BasicTracerProvider);
     });
 
-    it('should construct an instance with default trace params', () => {
+    it('should construct an instance with default span limits', () => {
       const tracer = new BasicTracerProvider({}).getTracer('default');
-      assert.deepStrictEqual(tracer.getActiveTraceParams(), {
-        numberOfAttributesPerSpan: 1000,
-        numberOfEventsPerSpan: 1000,
-        numberOfLinksPerSpan: 1000,
+      assert.deepStrictEqual(tracer.getSpanLimits(), {
+        attributeCountLimit: 128,
+        eventCountLimit: 128,
+        linkCountLimit: 128,
       });
     });
 
-    it('should construct an instance with customized numberOfAttributesPerSpan trace params', () => {
+    it('should construct an instance with customized attributeCountLimit span limits', () => {
       const tracer = new BasicTracerProvider({
-        traceParams: {
-          numberOfAttributesPerSpan: 100,
+        spanLimits: {
+          attributeCountLimit: 100,
         },
       }).getTracer('default');
-      assert.deepStrictEqual(tracer.getActiveTraceParams(), {
-        numberOfAttributesPerSpan: 100,
-        numberOfEventsPerSpan: 1000,
-        numberOfLinksPerSpan: 1000,
+      assert.deepStrictEqual(tracer.getSpanLimits(), {
+        attributeCountLimit: 100,
+        eventCountLimit: 128,
+        linkCountLimit: 128,
       });
     });
 
-    it('should construct an instance with customized numberOfEventsPerSpan trace params', () => {
+    it('should construct an instance with customized eventCountLimit span limits', () => {
       const tracer = new BasicTracerProvider({
-        traceParams: {
-          numberOfEventsPerSpan: 300,
+        spanLimits: {
+          eventCountLimit: 300,
         },
       }).getTracer('default');
-      assert.deepStrictEqual(tracer.getActiveTraceParams(), {
-        numberOfAttributesPerSpan: 1000,
-        numberOfEventsPerSpan: 300,
-        numberOfLinksPerSpan: 1000,
+      assert.deepStrictEqual(tracer.getSpanLimits(), {
+        attributeCountLimit: 128,
+        eventCountLimit: 300,
+        linkCountLimit: 128,
       });
     });
 
-    it('should construct an instance with customized numberOfLinksPerSpan trace params', () => {
+    it('should construct an instance with customized linkCountLimit span limits', () => {
       const tracer = new BasicTracerProvider({
-        traceParams: {
-          numberOfLinksPerSpan: 10,
+        spanLimits: {
+          linkCountLimit: 10,
         },
       }).getTracer('default');
-      assert.deepStrictEqual(tracer.getActiveTraceParams(), {
-        numberOfAttributesPerSpan: 1000,
-        numberOfEventsPerSpan: 1000,
-        numberOfLinksPerSpan: 10,
+      assert.deepStrictEqual(tracer.getSpanLimits(), {
+        attributeCountLimit: 128,
+        eventCountLimit: 128,
+        linkCountLimit: 10,
       });
     });
 
     it('should construct an instance of BasicTracerProvider', () => {
       const tracer = new BasicTracerProvider();
       assert.ok(tracer instanceof BasicTracerProvider);
+    });
+
+    it('should use noop span processor by default', () => {
+      const tracer = new BasicTracerProvider();
+      assert.ok(tracer.activeSpanProcessor instanceof NoopSpanProcessor);
+    });
+  });
+
+  describe('.register()', () => {
+    describe('propagator', () => {
+      class DummyPropagator implements TextMapPropagator {
+        inject(
+          context: Context,
+          carrier: any,
+          setter: TextMapSetter<any>
+        ): void {
+          throw new Error('Method not implemented.');
+        }
+        extract(
+          context: Context,
+          carrier: any,
+          getter: TextMapGetter<any>
+        ): Context {
+          throw new Error('Method not implemented.');
+        }
+        fields(): string[] {
+          throw new Error('Method not implemented.');
+        }
+      }
+
+      let setGlobalPropagatorStub: sinon.SinonSpy<
+        [TextMapPropagator],
+        boolean
+      >;
+      let originalPropagators: string | number | undefined | string[];
+      beforeEach(() => {
+        setGlobalPropagatorStub = sinon.spy(propagation, 'setGlobalPropagator');
+        originalPropagators = envSource.OTEL_PROPAGATORS;
+      });
+
+      afterEach(() => {
+        setGlobalPropagatorStub.restore();
+
+        // otherwise we may assign 'undefined' (a string)
+        if (originalPropagators !== undefined) {
+          envSource.OTEL_PROPAGATORS = originalPropagators;
+        } else {
+          delete envSource.OTEL_PROPAGATORS;
+        }
+      });
+
+      it('should be set to a given value if it it provided', () => {
+        const provider = new BasicTracerProvider();
+        provider.register({
+          propagator: new DummyPropagator(),
+        });
+        assert.ok(
+          setGlobalPropagatorStub.calledOnceWithExactly(
+            sinon.match.instanceOf(DummyPropagator)
+          )
+        );
+      });
+
+      it('should be composite if 2 or more propagators provided in an environment variable', () => {
+        const provider = new BasicTracerProvider();
+        provider.register();
+
+        assert.ok(
+          setGlobalPropagatorStub.calledOnceWithExactly(
+            sinon.match.instanceOf(CompositePropagator)
+          )
+        );
+        assert.deepStrictEqual(setGlobalPropagatorStub.args[0][0].fields(), [
+          'traceparent',
+          'tracestate',
+          'baggage',
+        ]);
+      });
+
+      it('warns if there is no propagator registered with a given name', () => {
+        const warnStub = sinon.spy(diag, 'warn');
+
+        envSource.OTEL_PROPAGATORS = 'missing-propagator';
+        const provider = new BasicTracerProvider({});
+        provider.register();
+
+        assert.ok(
+          warnStub.calledOnceWithExactly(
+            'Propagator "missing-propagator" requested through environment variable is unavailable.'
+          )
+        );
+
+        warnStub.restore();
+      });
+    });
+
+    describe('exporter', () => {
+      class CustomTracerProvider extends BasicTracerProvider {
+        protected _getSpanExporter(name: string): SpanExporter | undefined {
+          return name === 'memory'
+            ? new InMemorySpanExporter()
+            : BasicTracerProvider._registeredExporters.get(name)?.();
+        }
+      }
+
+      afterEach(() => {
+        delete envSource.OTEL_TRACES_EXPORTER;
+      });
+
+      it('logs error if there is no exporter registered with a given name', () => {
+        const errorStub = sinon.spy(diag, 'error');
+
+        envSource.OTEL_TRACES_EXPORTER = 'missing-exporter';
+        const provider = new BasicTracerProvider({});
+        provider.register();
+        assert.ok(
+          errorStub.getCall(0).args[0] ===
+            'Exporter "missing-exporter" requested through environment variable is unavailable.'
+        );
+        errorStub.restore();
+      });
+
+      it('registers trace exporter from environment variable', () => {
+        envSource.OTEL_TRACES_EXPORTER = 'memory';
+        const provider = new CustomTracerProvider({});
+        provider.register();
+        const processor = provider.getActiveSpanProcessor();
+        assert(processor instanceof BatchSpanProcessor);
+        // @ts-expect-error access configured to verify its the correct one
+        const exporter = processor._exporter;
+        assert(exporter instanceof InMemorySpanExporter);
+      });
     });
   });
 
@@ -147,7 +283,7 @@ describe('BasicTracerProvider', () => {
       const span = tracer.startSpan('my-span', {});
       assert.ok(span);
       assert.ok(span instanceof Span);
-      const context = span.context();
+      const context = span.spanContext();
       assert.ok(context.traceId.match(/[a-f0-9]{32}/));
       assert.ok(context.spanId.match(/[a-f0-9]{16}/));
       assert.strictEqual(context.traceFlags, TraceFlags.SAMPLED);
@@ -180,7 +316,7 @@ describe('BasicTracerProvider', () => {
       const span = tracer.startSpan(
         'my-span',
         {},
-        setExtractedSpanContext(ROOT_CONTEXT, {
+        trace.setSpanContext(ROOT_CONTEXT, {
           traceId: 'd4cda95b652f4a1592b449d5929fda1b',
           spanId: '6e0c63257de34c92',
           traceFlags: TraceFlags.SAMPLED,
@@ -188,7 +324,7 @@ describe('BasicTracerProvider', () => {
         })
       );
       assert.ok(span instanceof Span);
-      const context = span.context();
+      const context = span.spanContext();
       assert.strictEqual(context.traceId, 'd4cda95b652f4a1592b449d5929fda1b');
       assert.strictEqual(context.traceFlags, TraceFlags.SAMPLED);
       assert.deepStrictEqual(context.traceState, state);
@@ -201,10 +337,10 @@ describe('BasicTracerProvider', () => {
       const childSpan = tracer.startSpan(
         'child-span',
         {},
-        setActiveSpan(ROOT_CONTEXT, span)
+        trace.setSpan(ROOT_CONTEXT, span)
       );
-      const context = childSpan.context();
-      assert.strictEqual(context.traceId, span.context().traceId);
+      const context = childSpan.spanContext();
+      assert.strictEqual(context.traceId, span.spanContext().traceId);
       assert.strictEqual(context.traceFlags, TraceFlags.SAMPLED);
       span.end();
       childSpan.end();
@@ -217,20 +353,22 @@ describe('BasicTracerProvider', () => {
       const rootSpan = tracer.startSpan(
         'root-span',
         { root: true },
-        setActiveSpan(ROOT_CONTEXT, span)
+        trace.setSpan(ROOT_CONTEXT, span)
       );
-      const context = rootSpan.context();
-      assert.notStrictEqual(context.traceId, overrideParent.context().traceId);
+      const context = rootSpan.spanContext();
+      assert.notStrictEqual(context.traceId, overrideParent.spanContext().traceId);
       span.end();
       rootSpan.end();
     });
 
     it('should start a span with name and with invalid parent span', () => {
-      const tracer = new BasicTracerProvider().getTracer('default');
+      const tracer = new BasicTracerProvider({
+        sampler: new AlwaysOnSampler(),
+      }).getTracer('default');
       const span = tracer.startSpan(
         'my-span',
         {},
-        setExtractedSpanContext(
+        trace.setSpanContext(
           ROOT_CONTEXT,
           ('invalid-parent' as unknown) as SpanContext
         )
@@ -244,28 +382,27 @@ describe('BasicTracerProvider', () => {
       const span = tracer.startSpan(
         'my-span',
         {},
-        setExtractedSpanContext(ROOT_CONTEXT, {
+        trace.setSpanContext(ROOT_CONTEXT, {
           traceId: '0',
           spanId: '0',
           traceFlags: TraceFlags.SAMPLED,
         })
       );
       assert.ok(span instanceof Span);
-      const context = span.context();
+      const context = span.spanContext();
       assert.ok(context.traceId.match(/[a-f0-9]{32}/));
       assert.ok(context.spanId.match(/[a-f0-9]{16}/));
       assert.strictEqual(context.traceFlags, TraceFlags.SAMPLED);
       assert.deepStrictEqual(context.traceState, undefined);
     });
 
-    it('should return a no recording span when never sampling', () => {
+    it('should return a non recording span when never sampling', () => {
       const tracer = new BasicTracerProvider({
         sampler: new AlwaysOffSampler(),
-        logger: new NoopLogger(),
       }).getTracer('default');
       const span = tracer.startSpan('my-span');
-      assert.ok(span instanceof NoRecordingSpan);
-      const context = span.context();
+      assert.ok(!span.isRecording());
+      const context = span.spanContext();
       assert.ok(context.traceId.match(/[a-f0-9]{32}/));
       assert.ok(context.spanId.match(/[a-f0-9]{16}/));
       assert.strictEqual(context.traceFlags, TraceFlags.NONE);
@@ -279,7 +416,7 @@ describe('BasicTracerProvider', () => {
       }).getTracer('default');
       const span = tracer.startSpan('my-span');
       assert.ok(span instanceof Span);
-      assert.strictEqual(span.context().traceFlags, TraceFlags.SAMPLED);
+      assert.strictEqual(span.spanContext().traceFlags, TraceFlags.SAMPLED);
       assert.strictEqual(span.isRecording(), true);
     });
 
@@ -291,26 +428,72 @@ describe('BasicTracerProvider', () => {
     });
   });
 
-  describe('.getCurrentSpan()', () => {
-    it('should return current span when it exists', () => {
-      context.setGlobalContextManager({
-        active: () => setActiveSpan(ROOT_CONTEXT, ('foo' as any) as Span),
-        disable: () => {},
-      } as ContextManager);
-
-      const tracer = new BasicTracerProvider().getTracer('default');
-      assert.deepStrictEqual(tracer.getCurrentSpan(), 'foo');
-    });
-  });
-
   describe('.withSpan()', () => {
     it('should run context with NoopContextManager context manager', done => {
       const tracer = new BasicTracerProvider().getTracer('default');
       const span = tracer.startSpan('my-span');
-      tracer.withSpan(span, () => {
-        assert.deepStrictEqual(tracer.getCurrentSpan(), undefined);
+      context.with(trace.setSpan(context.active(), span), () => {
+        assert.deepStrictEqual(trace.getSpan(context.active()), undefined);
         return done();
       });
+    });
+  });
+
+  describe('.forceFlush()', () => {
+    it('should call forceFlush on all registered span processors', done => {
+      sinon.restore();
+      const forceFlushStub = sinon.stub(
+        NoopSpanProcessor.prototype,
+        'forceFlush'
+      );
+      forceFlushStub.resolves();
+
+      const tracerProvider = new BasicTracerProvider();
+      const spanProcessorOne = new NoopSpanProcessor();
+      const spanProcessorTwo = new NoopSpanProcessor();
+
+      tracerProvider.addSpanProcessor(spanProcessorOne);
+      tracerProvider.addSpanProcessor(spanProcessorTwo);
+
+      tracerProvider
+        .forceFlush()
+        .then(() => {
+          sinon.restore();
+          assert(forceFlushStub.calledTwice);
+          done();
+        })
+        .catch(error => {
+          sinon.restore();
+          done(error);
+        });
+    });
+
+    it('should throw error when calling forceFlush on all registered span processors fails', done => {
+      sinon.restore();
+
+      const forceFlushStub = sinon.stub(
+        NoopSpanProcessor.prototype,
+        'forceFlush'
+      );
+      forceFlushStub.returns(Promise.reject('Error'));
+
+      const tracerProvider = new BasicTracerProvider();
+      const spanProcessorOne = new NoopSpanProcessor();
+      const spanProcessorTwo = new NoopSpanProcessor();
+      tracerProvider.addSpanProcessor(spanProcessorOne);
+      tracerProvider.addSpanProcessor(spanProcessorTwo);
+
+      tracerProvider
+        .forceFlush()
+        .then(() => {
+          sinon.restore();
+          done(new Error('Successful forceFlush not expected'));
+        })
+        .catch(_error => {
+          sinon.restore();
+          sinon.assert.calledTwice(forceFlushStub);
+          done();
+        });
     });
   });
 
@@ -319,10 +502,10 @@ describe('BasicTracerProvider', () => {
       const tracer = new BasicTracerProvider().getTracer('default');
       const span = tracer.startSpan('my-span');
       const fn = () => {
-        assert.deepStrictEqual(tracer.getCurrentSpan(), undefined);
+        assert.deepStrictEqual(trace.getSpan(context.active()), undefined);
         return done();
       };
-      const patchedFn = tracer.bind(fn, span);
+      const patchedFn = context.bind(fn, trace.setSpan(context.active(), span));
       return patchedFn();
     });
   });
@@ -337,7 +520,7 @@ describe('BasicTracerProvider', () => {
   describe('.shutdown()', () => {
     it('should trigger shutdown when manually invoked', () => {
       const tracerProvider = new BasicTracerProvider();
-      const shutdownStub = sandbox.stub(
+      const shutdownStub = sinon.stub(
         tracerProvider.getActiveSpanProcessor(),
         'shutdown'
       );

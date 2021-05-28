@@ -14,19 +14,20 @@
  * limitations under the License.
  */
 
-import * as os from 'os';
 import * as semver from 'semver';
 import * as gcpMetadata from 'gcp-metadata';
+import { diag } from '@opentelemetry/api';
 import {
   Detector,
-  ResourceDetectionConfigWithLogger,
+  ResourceDetectionConfig,
   Resource,
   ResourceAttributes,
-  CLOUD_RESOURCE,
-  HOST_RESOURCE,
-  K8S_RESOURCE,
-  CONTAINER_RESOURCE,
 } from '@opentelemetry/resources';
+import { getEnv } from '@opentelemetry/core';
+import {
+  CloudProviderValues,
+  ResourceAttributes as SemanticResourceAttributes,
+} from '@opentelemetry/semantic-conventions';
 
 /**
  * The GcpDetector can be used to detect if a process is running in the Google
@@ -40,14 +41,14 @@ class GcpDetector implements Detector {
    * populated with instance metadata. Returns a promise containing an
    * empty {@link Resource} if the connection or parsing of the metadata fails.
    *
-   * @param config The resource detection config with a required logger
+   * @param config The resource detection config
    */
-  async detect(config: ResourceDetectionConfigWithLogger): Promise<Resource> {
+  async detect(_config?: ResourceDetectionConfig): Promise<Resource> {
     if (
       !semver.satisfies(process.version, '>=10') ||
       !(await gcpMetadata.isAvailable())
     ) {
-      config.logger.debug('GcpDetector failed: GCP Metadata unavailable.');
+      diag.debug('GcpDetector failed: GCP Metadata unavailable.');
       return Resource.empty();
     }
 
@@ -59,12 +60,13 @@ class GcpDetector implements Detector {
     ]);
 
     const attributes: ResourceAttributes = {};
-    attributes[CLOUD_RESOURCE.ACCOUNT_ID] = projectId;
-    attributes[HOST_RESOURCE.ID] = instanceId;
-    attributes[CLOUD_RESOURCE.ZONE] = zoneId;
-    attributes[CLOUD_RESOURCE.PROVIDER] = 'gcp';
+    attributes[SemanticResourceAttributes.CLOUD_ACCOUNT_ID] = projectId;
+    attributes[SemanticResourceAttributes.HOST_ID] = instanceId;
+    attributes[SemanticResourceAttributes.CLOUD_AVAILABILITY_ZONE] = zoneId;
+    attributes[SemanticResourceAttributes.CLOUD_PROVIDER] =
+      CloudProviderValues.GCP;
 
-    if (process.env.KUBERNETES_SERVICE_HOST)
+    if (getEnv().KUBERNETES_SERVICE_HOST)
       this._addK8sAttributes(attributes, clusterName);
 
     return new Resource(attributes);
@@ -75,10 +77,12 @@ class GcpDetector implements Detector {
     attributes: ResourceAttributes,
     clusterName: string
   ): void {
-    attributes[K8S_RESOURCE.CLUSTER_NAME] = clusterName;
-    attributes[K8S_RESOURCE.NAMESPACE_NAME] = process.env.NAMESPACE || '';
-    attributes[K8S_RESOURCE.POD_NAME] = process.env.HOSTNAME || os.hostname();
-    attributes[CONTAINER_RESOURCE.NAME] = process.env.CONTAINER_NAME || '';
+    const env = getEnv();
+
+    attributes[SemanticResourceAttributes.K8S_CLUSTER_NAME] = clusterName;
+    attributes[SemanticResourceAttributes.K8S_NAMESPACE_NAME] = env.NAMESPACE;
+    attributes[SemanticResourceAttributes.K8S_POD_NAME] = env.HOSTNAME;
+    attributes[SemanticResourceAttributes.CONTAINER_NAME] = env.CONTAINER_NAME;
   }
 
   /** Gets project id from GCP project metadata. */

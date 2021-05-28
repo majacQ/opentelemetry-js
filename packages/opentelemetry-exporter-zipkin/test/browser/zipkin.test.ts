@@ -15,7 +15,6 @@
  */
 
 import {
-  NoopLogger,
   setGlobalErrorHandler,
   loggingErrorHandler,
 } from '@opentelemetry/core';
@@ -38,18 +37,16 @@ describe('Zipkin Exporter - web', () => {
   let spySend: sinon.SinonSpy;
   let spyBeacon: sinon.SinonSpy;
   let spans: ReadableSpan[];
-  let sandbox: sinon.SinonSandbox;
 
   beforeEach(() => {
-    sandbox = sinon.createSandbox();
-    spySend = sandbox.stub(XMLHttpRequest.prototype, 'send');
-    spyBeacon = sandbox.stub(navigator, 'sendBeacon');
+    spySend = sinon.stub(XMLHttpRequest.prototype, 'send');
+    spyBeacon = sinon.stub(navigator, 'sendBeacon');
     spans = [];
     spans.push(Object.assign({}, mockedReadableSpan));
   });
 
   afterEach(() => {
-    sandbox.restore();
+    sinon.restore();
     navigator.sendBeacon = sendBeacon;
   });
 
@@ -99,6 +96,68 @@ describe('Zipkin Exporter - web', () => {
         });
       });
     });
+
+    describe('should use url defined in environment', () => {
+      let server: any;
+      const endpointUrl = 'http://localhost:9412';
+      beforeEach(() => {
+        (window.navigator as any).sendBeacon = false;
+        (window as any).OTEL_EXPORTER_ZIPKIN_ENDPOINT = endpointUrl;
+        zipkinExporter = new ZipkinExporter(zipkinConfig);
+        server = sinon.fakeServer.create();
+      });
+      afterEach(() => {
+        server.restore();
+      });
+
+      it('should successfully send the spans using XMLHttpRequest', done => {
+        zipkinExporter.export(spans, () => {});
+
+        setTimeout(() => {
+          const request = server.requests[0];
+          assert(request.url, endpointUrl);
+          const body = request.requestBody;
+          const json = JSON.parse(body) as any;
+          ensureSpanIsCorrect(json[0]);
+
+          done();
+        });
+      });
+    });
+  });
+  describe('when getExportRequestHeaders is defined', () => {
+    let server: any;
+    beforeEach(() => {
+      server = sinon.fakeServer.create();
+      spySend.restore();
+    });
+
+    afterEach(() => {
+      server.restore();
+    });
+
+    it('should add headers from callback', done => {
+      zipkinExporter = new ZipkinExporter({
+        getExportRequestHeaders: () => {
+          return {
+            foo1: 'bar1',
+            foo2: 'bar2',
+          };
+        },
+      });
+      zipkinExporter.export(spans, () => {});
+
+      setTimeout(() => {
+        const [{ requestHeaders }] = server.requests;
+
+        ensureHeadersContain(requestHeaders, {
+          foo1: 'bar1',
+          foo2: 'bar2',
+        });
+
+        done();
+      });
+    });
   });
 
   describe('export with custom headers', () => {
@@ -110,7 +169,6 @@ describe('Zipkin Exporter - web', () => {
 
     beforeEach(() => {
       zipkinConfig = {
-        logger: new NoopLogger(),
         headers: customHeaders,
       };
       server = sinon.fakeServer.create();

@@ -1,12 +1,14 @@
 'use strict';
 
-const { ConsoleLogger, LogLevel } = require('@opentelemetry/core');
+const { DiagConsoleLogger, DiagLogLevel, diag } = require('@opentelemetry/api');
 const { CollectorMetricExporter } = require('@opentelemetry/exporter-collector');
 const { MeterProvider } = require('@opentelemetry/metrics');
 
+// Optional and only needed to see the internal diagnostic logging (during development)
+diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.DEBUG);
+
 const metricExporter = new CollectorMetricExporter({
   serviceName: 'basic-metric-service',
-  logger: new ConsoleLogger(LogLevel.DEBUG),
 });
 
 let interval;

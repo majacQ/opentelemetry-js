@@ -14,20 +14,20 @@
  * limitations under the License.
  */
 
-import * as api from '@opentelemetry/api';
-import { ExportResultCode, NoopLogger } from '@opentelemetry/core';
-import * as assert from 'assert';
-import * as sinon from 'sinon';
-import { CollectorExporterBase } from '../../src/CollectorExporterBase';
-import { CollectorExporterConfigBase } from '../../src/types';
+import { Counter, ValueObserver } from '@opentelemetry/api-metrics';
+import { ExportResultCode } from '@opentelemetry/core';
 import {
   BoundCounter,
   BoundObserver,
   Metric,
   MetricRecord,
 } from '@opentelemetry/metrics';
-import { mockCounter, mockObserver } from '../helper';
+import * as assert from 'assert';
+import * as sinon from 'sinon';
+import { CollectorExporterBase } from '../../src/CollectorExporterBase';
 import * as collectorTypes from '../../src/types';
+import { CollectorExporterConfigBase } from '../../src/types';
+import { mockCounter, mockObserver } from '../helper';
 
 type CollectorExporterConfig = CollectorExporterConfigBase;
 class CollectorMetricExporter extends CollectorExporterBase<
@@ -55,6 +55,11 @@ describe('CollectorMetricExporter - common', () => {
   let collectorExporter: CollectorMetricExporter;
   let collectorExporterConfig: CollectorExporterConfig;
   let metrics: MetricRecord[];
+
+  afterEach(() => {
+    sinon.restore();
+  });
+
   describe('constructor', () => {
     let onInitSpy: any;
 
@@ -62,15 +67,14 @@ describe('CollectorMetricExporter - common', () => {
       onInitSpy = sinon.stub(CollectorMetricExporter.prototype, 'onInit');
       collectorExporterConfig = {
         hostname: 'foo',
-        logger: new NoopLogger(),
         serviceName: 'bar',
         attributes: {},
         url: 'http://foo.bar.com',
       };
       collectorExporter = new CollectorMetricExporter(collectorExporterConfig);
       metrics = [];
-      const counter: Metric<BoundCounter> & api.Counter = mockCounter();
-      const observer: Metric<BoundObserver> & api.ValueObserver = mockObserver(
+      const counter: Metric<BoundCounter> & Counter = mockCounter();
+      const observer: Metric<BoundObserver> & ValueObserver = mockObserver(
         observerResult => {
           observerResult.observe(3, {});
           observerResult.observe(6, {});
@@ -81,10 +85,6 @@ describe('CollectorMetricExporter - common', () => {
 
       metrics.push((await counter.getMetricRecord())[0]);
       metrics.push((await observer.getMetricRecord())[0]);
-    });
-
-    afterEach(() => {
-      onInitSpy.restore();
     });
 
     it('should create an instance', () => {
@@ -107,10 +107,6 @@ describe('CollectorMetricExporter - common', () => {
       it('should set url', () => {
         assert.strictEqual(collectorExporter.url, 'http://foo.bar.com');
       });
-
-      it('should set logger', () => {
-        assert.ok(collectorExporter.logger === collectorExporterConfig.logger);
-      });
     });
 
     describe('when config is missing certain params', () => {
@@ -124,10 +120,6 @@ describe('CollectorMetricExporter - common', () => {
           'collector-metric-exporter'
         );
       });
-
-      it('should set default logger', () => {
-        assert.ok(collectorExporter.logger instanceof NoopLogger);
-      });
     });
   });
 
@@ -136,9 +128,6 @@ describe('CollectorMetricExporter - common', () => {
     beforeEach(() => {
       spySend = sinon.stub(CollectorMetricExporter.prototype, 'send');
       collectorExporter = new CollectorMetricExporter(collectorExporterConfig);
-    });
-    afterEach(() => {
-      spySend.restore();
     });
 
     it('should export metrics as collectorTypes.Metrics', done => {
@@ -212,15 +201,11 @@ describe('CollectorMetricExporter - common', () => {
       );
       collectorExporterConfig = {
         hostname: 'foo',
-        logger: new NoopLogger(),
         serviceName: 'bar',
         attributes: {},
         url: 'http://foo.bar.com',
       };
       collectorExporter = new CollectorMetricExporter(collectorExporterConfig);
-    });
-    afterEach(() => {
-      onShutdownSpy.restore();
     });
 
     it('should call onShutdown', async () => {

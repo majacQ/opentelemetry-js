@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { ObserverResult } from '@opentelemetry/api';
+import { ObserverResult } from '@opentelemetry/api-metrics';
 import {
   CounterMetric,
   SumAggregator,
@@ -24,14 +24,21 @@ import {
   HistogramAggregator,
 } from '@opentelemetry/metrics';
 import * as assert from 'assert';
+import * as sinon from 'sinon';
 import * as http from 'http';
 import { PrometheusExporter } from '../src';
 import { mockAggregator, mockedHrTimeMs } from './util';
+import { SinonStubbedInstance } from 'sinon';
 
 describe('PrometheusExporter', () => {
   mockAggregator(SumAggregator);
   mockAggregator(LastValueAggregator);
   mockAggregator(HistogramAggregator);
+
+  afterEach(() => {
+    delete process.env.OTEL_EXPORTER_PROMETHEUS_HOST;
+    delete process.env.OTEL_EXPORTER_PROMETHEUS_PORT;
+  });
 
   describe('constructor', () => {
     it('should construct an exporter', done => {
@@ -62,7 +69,7 @@ describe('PrometheusExporter', () => {
   });
 
   describe('server', () => {
-    it('it should start on startServer() and call the callback', done => {
+    it('should start on startServer() and call the callback', done => {
       const exporter = new PrometheusExporter({
         port: 9722,
         preventServerStart: true,
@@ -74,7 +81,7 @@ describe('PrometheusExporter', () => {
       });
     });
 
-    it('it should listen on the default port and default endpoint', done => {
+    it('should listen on the default port and default endpoint', done => {
       const port = PrometheusExporter.DEFAULT_OPTIONS.port;
       const endpoint = PrometheusExporter.DEFAULT_OPTIONS.endpoint;
       const exporter = new PrometheusExporter({}, () => {
@@ -88,7 +95,7 @@ describe('PrometheusExporter', () => {
       });
     });
 
-    it('it should listen on a custom port and endpoint if provided', done => {
+    it('should listen on a custom port and endpoint if provided', done => {
       const port = 9991;
       const endpoint = '/metric';
 
@@ -109,7 +116,17 @@ describe('PrometheusExporter', () => {
       );
     });
 
-    it('it should not require endpoints to start with a slash', done => {
+    it('should listen on environmentally set host and port', () => {
+      process.env.OTEL_EXPORTER_PROMETHEUS_HOST = '127.0.0.1';
+      process.env.OTEL_EXPORTER_PROMETHEUS_PORT = '1234';
+      const exporter = new PrometheusExporter({}, async () => {
+        await exporter.shutdown();
+      });
+      assert.strictEqual(exporter['_host'], '127.0.0.1');
+      assert.strictEqual(exporter['_port'], 1234);
+    });
+
+    it('should not require endpoints to start with a slash', done => {
       const port = 9991;
       const endpoint = 'metric';
 
@@ -144,7 +161,7 @@ describe('PrometheusExporter', () => {
       );
     });
 
-    it('it should return a HTTP status 404 if the endpoint does not match', done => {
+    it('should return a HTTP status 404 if the endpoint does not match', done => {
       const port = 9912;
       const endpoint = '/metrics';
       const exporter = new PrometheusExporter(
@@ -171,6 +188,23 @@ describe('PrometheusExporter', () => {
         return done();
       });
     });
+
+    it('should able to call getMetricsRequestHandler function to generate response with metrics', () => {
+      const exporter = new PrometheusExporter({ preventServerStart: true });
+      const mockRequest: SinonStubbedInstance<http.IncomingMessage> = sinon.createStubInstance(
+        http.IncomingMessage
+      );
+      const mockResponse: SinonStubbedInstance<http.ServerResponse> = sinon.createStubInstance(
+        http.ServerResponse
+      );
+      exporter.getMetricsRequestHandler(
+        (mockRequest as unknown) as http.IncomingMessage,
+        (mockResponse as unknown) as http.ServerResponse
+      );
+      sinon.assert.calledOnce(mockResponse.setHeader);
+      sinon.assert.calledOnce(mockResponse.end);
+      assert.strictEqual(mockResponse.statusCode, 200);
+    });
   });
 
   describe('export', () => {
@@ -195,7 +229,7 @@ describe('PrometheusExporter', () => {
     });
 
     it('should export a count aggregation', done => {
-      const counter = meter.createCounter('counter', {
+      const counter = meter.createCounter('counter_total', {
         description: 'a test description',
       });
 
@@ -217,13 +251,13 @@ describe('PrometheusExporter', () => {
 
                   assert.strictEqual(
                     lines[0],
-                    '# HELP counter a test description'
+                    '# HELP counter_total a test description'
                   );
 
                   assert.deepStrictEqual(lines, [
-                    '# HELP counter a test description',
-                    '# TYPE counter counter',
-                    `counter{key1="labelValue1"} 20 ${mockedHrTimeMs}`,
+                    '# HELP counter_total a test description',
+                    '# TYPE counter_total counter',
+                    `counter_total{key1="labelValue1"} 20 ${mockedHrTimeMs}`,
                     '',
                   ]);
 
@@ -279,7 +313,7 @@ describe('PrometheusExporter', () => {
     });
 
     it('should export multiple labels', done => {
-      const counter = meter.createCounter('counter', {
+      const counter = meter.createCounter('counter_total', {
         description: 'a test description',
       }) as CounterMetric;
 
@@ -294,10 +328,10 @@ describe('PrometheusExporter', () => {
                 const lines = body.split('\n');
 
                 assert.deepStrictEqual(lines, [
-                  '# HELP counter a test description',
-                  '# TYPE counter counter',
-                  `counter{counterKey1="labelValue1"} 10 ${mockedHrTimeMs}`,
-                  `counter{counterKey1="labelValue2"} 20 ${mockedHrTimeMs}`,
+                  '# HELP counter_total a test description',
+                  '# TYPE counter_total counter',
+                  `counter_total{counterKey1="labelValue1"} 10 ${mockedHrTimeMs}`,
+                  `counter_total{counterKey1="labelValue2"} 20 ${mockedHrTimeMs}`,
                   '',
                 ]);
 
@@ -310,7 +344,7 @@ describe('PrometheusExporter', () => {
     });
 
     it('should export multiple labels on manual shutdown', done => {
-      const counter = meter.createCounter('counter', {
+      const counter = meter.createCounter('counter_total', {
         description: 'a test description',
       }) as CounterMetric;
 
@@ -325,11 +359,11 @@ describe('PrometheusExporter', () => {
               const lines = body.split('\n');
 
               assert.deepStrictEqual(lines, [
-                '# HELP counter a test description',
-                '# TYPE counter counter',
-                `counter{counterKey1="labelValue1"} 10 ${mockedHrTimeMs}`,
-                `counter{counterKey1="labelValue2"} 20 ${mockedHrTimeMs}`,
-                `counter{counterKey1="labelValue3"} 30 ${mockedHrTimeMs}`,
+                '# HELP counter_total a test description',
+                '# TYPE counter_total counter',
+                `counter_total{counterKey1="labelValue1"} 10 ${mockedHrTimeMs}`,
+                `counter_total{counterKey1="labelValue2"} 20 ${mockedHrTimeMs}`,
+                `counter_total{counterKey1="labelValue3"} 30 ${mockedHrTimeMs}`,
                 '',
               ]);
 
@@ -358,7 +392,7 @@ describe('PrometheusExporter', () => {
     });
 
     it('should add a description if missing', done => {
-      const counter = meter.createCounter('counter');
+      const counter = meter.createCounter('counter_total');
 
       const boundCounter = counter.bind({ key1: 'labelValue1' });
       boundCounter.add(10);
@@ -371,9 +405,9 @@ describe('PrometheusExporter', () => {
                 const lines = body.split('\n');
 
                 assert.deepStrictEqual(lines, [
-                  '# HELP counter description missing',
-                  '# TYPE counter counter',
-                  `counter{key1="labelValue1"} 10 ${mockedHrTimeMs}`,
+                  '# HELP counter_total description missing',
+                  '# TYPE counter_total counter',
+                  `counter_total{key1="labelValue1"} 10 ${mockedHrTimeMs}`,
                   '',
                 ]);
 
@@ -398,9 +432,9 @@ describe('PrometheusExporter', () => {
                 const lines = body.split('\n');
 
                 assert.deepStrictEqual(lines, [
-                  '# HELP counter_bad_name description missing',
-                  '# TYPE counter_bad_name counter',
-                  `counter_bad_name{key1="labelValue1"} 10 ${mockedHrTimeMs}`,
+                  '# HELP counter_bad_name_total description missing',
+                  '# TYPE counter_bad_name_total counter',
+                  `counter_bad_name_total{key1="labelValue1"} 10 ${mockedHrTimeMs}`,
                   '',
                 ]);
 
@@ -586,9 +620,9 @@ describe('PrometheusExporter', () => {
                   const lines = body.split('\n');
 
                   assert.deepStrictEqual(lines, [
-                    '# HELP test_prefix_counter description missing',
-                    '# TYPE test_prefix_counter counter',
-                    `test_prefix_counter{key1="labelValue1"} 10 ${mockedHrTimeMs}`,
+                    '# HELP test_prefix_counter_total description missing',
+                    '# TYPE test_prefix_counter_total counter',
+                    `test_prefix_counter_total{key1="labelValue1"} 10 ${mockedHrTimeMs}`,
                     '',
                   ]);
 
@@ -616,9 +650,9 @@ describe('PrometheusExporter', () => {
                   const lines = body.split('\n');
 
                   assert.deepStrictEqual(lines, [
-                    '# HELP counter description missing',
-                    '# TYPE counter counter',
-                    `counter{key1="labelValue1"} 10 ${mockedHrTimeMs}`,
+                    '# HELP counter_total description missing',
+                    '# TYPE counter_total counter',
+                    `counter_total{key1="labelValue1"} 10 ${mockedHrTimeMs}`,
                     '',
                   ]);
 
@@ -646,9 +680,9 @@ describe('PrometheusExporter', () => {
                   const lines = body.split('\n');
 
                   assert.deepStrictEqual(lines, [
-                    '# HELP counter description missing',
-                    '# TYPE counter counter',
-                    `counter{key1="labelValue1"} 10 ${mockedHrTimeMs}`,
+                    '# HELP counter_total description missing',
+                    '# TYPE counter_total counter',
+                    `counter_total{key1="labelValue1"} 10 ${mockedHrTimeMs}`,
                     '',
                   ]);
 
@@ -676,9 +710,9 @@ describe('PrometheusExporter', () => {
                   const lines = body.split('\n');
 
                   assert.deepStrictEqual(lines, [
-                    '# HELP counter description missing',
-                    '# TYPE counter counter',
-                    'counter{key1="labelValue1"} 10',
+                    '# HELP counter_total description missing',
+                    '# TYPE counter_total counter',
+                    'counter_total{key1="labelValue1"} 10',
                     '',
                   ]);
 

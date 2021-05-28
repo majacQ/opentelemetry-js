@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
+import { ResourceAttributes as SemanticResourceAttributes } from '@opentelemetry/semantic-conventions';
 import { SDK_INFO } from '@opentelemetry/core';
-import { TELEMETRY_SDK_RESOURCE } from './constants';
 import { ResourceAttributes } from './types';
 
 /**
@@ -37,9 +37,12 @@ export class Resource {
    */
   static createTelemetrySDKResource(): Resource {
     return new Resource({
-      [TELEMETRY_SDK_RESOURCE.LANGUAGE]: SDK_INFO.LANGUAGE,
-      [TELEMETRY_SDK_RESOURCE.NAME]: SDK_INFO.NAME,
-      [TELEMETRY_SDK_RESOURCE.VERSION]: SDK_INFO.VERSION,
+      [SemanticResourceAttributes.TELEMETRY_SDK_LANGUAGE]:
+        SDK_INFO[SemanticResourceAttributes.TELEMETRY_SDK_LANGUAGE],
+      [SemanticResourceAttributes.TELEMETRY_SDK_NAME]:
+        SDK_INFO[SemanticResourceAttributes.TELEMETRY_SDK_NAME],
+      [SemanticResourceAttributes.TELEMETRY_SDK_VERSION]:
+        SDK_INFO[SemanticResourceAttributes.TELEMETRY_SDK_VERSION],
     });
   }
 
@@ -54,7 +57,7 @@ export class Resource {
 
   /**
    * Returns a new, merged {@link Resource} by merging the current Resource
-   * with the other Resource. In case of a collision, current Resource takes
+   * with the other Resource. In case of a collision, other Resource takes
    * precedence.
    *
    * @param other the Resource that will be merged with this.
@@ -63,11 +66,11 @@ export class Resource {
   merge(other: Resource | null): Resource {
     if (!other || !Object.keys(other.attributes).length) return this;
 
-    // Attributes from resource overwrite attributes from other resource.
+    // SpanAttributes from resource overwrite attributes from other resource.
     const mergedAttributes = Object.assign(
       {},
-      other.attributes,
-      this.attributes
+      this.attributes,
+      other.attributes
     );
     return new Resource(mergedAttributes);
   }

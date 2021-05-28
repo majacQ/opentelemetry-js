@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import * as api from '@opentelemetry/api';
+import * as api from '@opentelemetry/api-metrics';
 import { InstrumentationLibrary } from '@opentelemetry/core';
 import { Resource } from '@opentelemetry/resources';
 import { BoundValueRecorder } from './BoundInstrument';
@@ -47,7 +47,6 @@ export class ValueRecorderMetric
       labels,
       this._disabled,
       this._valueType,
-      this._logger,
       this._processor.aggregatorFor(this._descriptor)
     );
   }

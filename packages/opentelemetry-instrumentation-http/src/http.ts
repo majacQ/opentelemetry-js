@@ -14,19 +14,19 @@
  * limitations under the License.
  */
 import {
-  StatusCode,
   context,
+  diag,
+  INVALID_SPAN_CONTEXT,
   propagation,
+  ROOT_CONTEXT,
   Span,
   SpanKind,
   SpanOptions,
-  Status,
-  setActiveSpan,
-  SpanContext,
-  TraceFlags,
-  ROOT_CONTEXT,
+  SpanStatus,
+  SpanStatusCode,
+  trace,
 } from '@opentelemetry/api';
-import { NoRecordingSpan } from '@opentelemetry/core';
+import { suppressTracing } from '@opentelemetry/core';
 import type * as http from 'http';
 import type * as https from 'https';
 import { Socket } from 'net';
@@ -51,6 +51,7 @@ import {
   isWrapped,
   safeExecuteInTheMiddle,
 } from '@opentelemetry/instrumentation';
+import { RPCMetadata, RPCType, setRPCMetadata } from '@opentelemetry/core';
 
 /**
  * Http instrumentation instrumentation for Opentelemetry
@@ -59,11 +60,6 @@ export class HttpInstrumentation extends InstrumentationBase<Http> {
   /** keep track on spans not ended */
   private readonly _spanNotEnded: WeakSet<Span> = new WeakSet<Span>();
   private readonly _version = process.versions.node;
-  private readonly _emptySpanContext: SpanContext = {
-    traceId: '',
-    spanId: '',
-    traceFlags: TraceFlags.NONE,
-  };
 
   constructor(config: HttpInstrumentationConfig & InstrumentationConfig = {}) {
     super(
@@ -90,7 +86,7 @@ export class HttpInstrumentation extends InstrumentationBase<Http> {
       'http',
       ['*'],
       moduleExports => {
-        this._logger.debug(`Applying patch for http@${this._version}`);
+        diag.debug(`Applying patch for http@${this._version}`);
         if (isWrapped(moduleExports.request)) {
           this._unwrap(moduleExports, 'request');
         }
@@ -119,7 +115,7 @@ export class HttpInstrumentation extends InstrumentationBase<Http> {
       },
       moduleExports => {
         if (moduleExports === undefined) return;
-        this._logger.debug(`Removing patch for http@${this._version}`);
+        diag.debug(`Removing patch for http@${this._version}`);
 
         this._unwrap(moduleExports, 'request');
         this._unwrap(moduleExports, 'get');
@@ -133,7 +129,7 @@ export class HttpInstrumentation extends InstrumentationBase<Http> {
       'https',
       ['*'],
       moduleExports => {
-        this._logger.debug(`Applying patch for https@${this._version}`);
+        diag.debug(`Applying patch for https@${this._version}`);
         if (isWrapped(moduleExports.request)) {
           this._unwrap(moduleExports, 'request');
         }
@@ -162,7 +158,7 @@ export class HttpInstrumentation extends InstrumentationBase<Http> {
       },
       moduleExports => {
         if (moduleExports === undefined) return;
-        this._logger.debug(`Removing patch for https@${this._version}`);
+        diag.debug(`Removing patch for https@${this._version}`);
 
         this._unwrap(moduleExports, 'request');
         this._unwrap(moduleExports, 'get');
@@ -222,6 +218,7 @@ export class HttpInstrumentation extends InstrumentationBase<Http> {
     return (original: Func<http.ClientRequest>): Func<http.ClientRequest> => {
       const instrumentation = this;
       return function httpsOutgoingRequest(
+        // eslint-disable-next-line node/no-unsupported-features/node-builtins
         options: https.RequestOptions | string | URL,
         ...args: HttpRequestArgs
       ): http.ClientRequest {
@@ -229,7 +226,7 @@ export class HttpInstrumentation extends InstrumentationBase<Http> {
         if (
           component === 'https' &&
           typeof options === 'object' &&
-          options?.constructor.name !== 'URL'
+          options?.constructor?.name !== 'URL'
         ) {
           options = Object.assign({}, options);
           instrumentation._setDefaultOptions(options);
@@ -249,6 +246,7 @@ export class HttpInstrumentation extends InstrumentationBase<Http> {
   /** Patches HTTPS outgoing get requests */
   private _getPatchHttpsOutgoingGetFunction(
     clientRequest: (
+      // eslint-disable-next-line node/no-unsupported-features/node-builtins
       options: http.RequestOptions | string | URL,
       ...args: HttpRequestArgs
     ) => http.ClientRequest
@@ -256,6 +254,7 @@ export class HttpInstrumentation extends InstrumentationBase<Http> {
     return (original: Func<http.ClientRequest>): Func<http.ClientRequest> => {
       const instrumentation = this;
       return function httpsOutgoingRequest(
+        // eslint-disable-next-line node/no-unsupported-features/node-builtins
         options: https.RequestOptions | string | URL,
         ...args: HttpRequestArgs
       ): http.ClientRequest {
@@ -292,26 +291,31 @@ export class HttpInstrumentation extends InstrumentationBase<Http> {
       this._callRequestHook(span, request);
     }
 
-    request.on(
+    /*
+     * User 'response' event listeners can be added before our listener,
+     * force our listener to be the first, so response emitter is bound
+     * before any user listeners are added to it.
+     */
+    request.prependListener(
       'response',
       (response: http.IncomingMessage & { aborted?: boolean }) => {
-        const attributes = utils.getOutgoingRequestAttributesOnResponse(
+        const responseAttributes = utils.getOutgoingRequestAttributesOnResponse(
           response,
           { hostname }
         );
-        span.setAttributes(attributes);
+        span.setAttributes(responseAttributes);
         if (this._getConfig().responseHook) {
           this._callResponseHook(span, response);
         }
 
-        this.tracer.bind(response);
-        this._logger.debug('outgoingRequest on response()');
+        context.bind(response);
+        diag.debug('outgoingRequest on response()');
         response.on('end', () => {
-          this._logger.debug('outgoingRequest on end()');
-          let status: Status;
+          diag.debug('outgoingRequest on end()');
+          let status: SpanStatus;
 
           if (response.aborted && !response.complete) {
-            status = { code: StatusCode.ERROR };
+            status = { code: SpanStatusCode.ERROR };
           } else {
             status = utils.parseResponseStatus(response.statusCode!);
           }
@@ -349,7 +353,7 @@ export class HttpInstrumentation extends InstrumentationBase<Http> {
       this._closeHttpSpan(span);
     });
 
-    this._logger.debug('http.ClientRequest return request');
+    diag.debug('http.ClientRequest return request');
     return request;
   }
 
@@ -375,23 +379,20 @@ export class HttpInstrumentation extends InstrumentationBase<Http> {
         : '/';
       const method = request.method || 'GET';
 
-      instrumentation._logger.debug(
-        '%s instrumentation incomingRequest',
-        component
-      );
+      diag.debug('%s instrumentation incomingRequest', component);
 
       if (
         utils.isIgnored(
           pathname,
           instrumentation._getConfig().ignoreIncomingPaths,
-          (e: Error) =>
-            instrumentation._logger.error(
-              'caught ignoreIncomingPaths error: ',
-              e
-            )
+          (e: Error) => diag.error('caught ignoreIncomingPaths error: ', e)
         )
       ) {
-        return original.apply(this, [event, ...args]);
+        return context.with(suppressTracing(context.active()), () => {
+          context.bind(request);
+          context.bind(response);
+          return original.apply(this, [event, ...args]);
+        });
       }
 
       const headers = request.headers;
@@ -404,13 +405,20 @@ export class HttpInstrumentation extends InstrumentationBase<Http> {
         }),
       };
 
-      return context.with(propagation.extract(ROOT_CONTEXT, headers), () => {
-        const span = instrumentation._startHttpSpan(
-          `${component.toLocaleUpperCase()} ${method}`,
-          spanOptions
-        );
+      const ctx = propagation.extract(ROOT_CONTEXT, headers);
+      const span = instrumentation._startHttpSpan(
+        `${component.toLocaleUpperCase()} ${method}`,
+        spanOptions,
+        ctx
+      );
+      const rpcMetadata: RPCMetadata = {
+        type: RPCType.HTTP,
+        span,
+      };
 
-        return instrumentation.tracer.withSpan(span, () => {
+      return context.with(
+        setRPCMetadata(trace.setSpan(ctx, span), rpcMetadata),
+        () => {
           context.bind(request);
           context.bind(response);
 
@@ -431,7 +439,7 @@ export class HttpInstrumentation extends InstrumentationBase<Http> {
             response.end = originalEnd;
             // Cannot pass args of type ResponseEndArgs,
             const returned = safeExecuteInTheMiddle(
-              () => response.end.apply(this, arguments as any),
+              () => response.end.apply(this, arguments as never),
               error => {
                 if (error) {
                   utils.setSpanWithError(span, error);
@@ -477,8 +485,8 @@ export class HttpInstrumentation extends InstrumentationBase<Http> {
               }
             }
           );
-        });
-      });
+        }
+      );
     };
   }
 
@@ -521,11 +529,7 @@ export class HttpInstrumentation extends InstrumentationBase<Http> {
         utils.isIgnored(
           origin + pathname,
           instrumentation._getConfig().ignoreOutgoingUrls,
-          (e: Error) =>
-            instrumentation._logger.error(
-              'caught ignoreOutgoingUrls error: ',
-              e
-            )
+          (e: Error) => diag.error('caught ignoreOutgoingUrls error: ', e)
         )
       ) {
         return original.apply(this, [optionsParsed, ...args]);
@@ -536,42 +540,55 @@ export class HttpInstrumentation extends InstrumentationBase<Http> {
         kind: SpanKind.CLIENT,
       };
       const span = instrumentation._startHttpSpan(operationName, spanOptions);
+
+      const parentContext = context.active();
+      const requestContext = trace.setSpan(parentContext, span);
+
       if (!optionsParsed.headers) {
         optionsParsed.headers = {};
       }
-      propagation.inject(
-        setActiveSpan(context.active(), span),
-        optionsParsed.headers
-      );
+      propagation.inject(requestContext, optionsParsed.headers);
 
-      const request: http.ClientRequest = safeExecuteInTheMiddle(
-        () => original.apply(this, [optionsParsed, ...args]),
-        error => {
-          if (error) {
-            utils.setSpanWithError(span, error);
-            instrumentation._closeHttpSpan(span);
-            throw error;
-          }
+      return context.with(requestContext, () => {
+        /*
+         * The response callback is registered before ClientRequest is bound,
+         * thus it is needed to bind it before the function call.
+         */
+        const cb = args[args.length - 1];
+        if (typeof cb === 'function') {
+          args[args.length - 1] = context.bind(cb, parentContext);
         }
-      );
 
-      instrumentation._logger.debug(
-        '%s instrumentation outgoingRequest',
-        component
-      );
-      instrumentation.tracer.bind(request);
-      return instrumentation._traceClientRequest(
-        component,
-        request,
-        optionsParsed,
-        span
-      );
+        const request: http.ClientRequest = safeExecuteInTheMiddle(
+          () => original.apply(this, [optionsParsed, ...args]),
+          error => {
+            if (error) {
+              utils.setSpanWithError(span, error);
+              instrumentation._closeHttpSpan(span);
+              throw error;
+            }
+          }
+        );
+
+        diag.debug('%s instrumentation outgoingRequest', component);
+        context.bind(request, parentContext);
+        return instrumentation._traceClientRequest(
+          component,
+          request,
+          optionsParsed,
+          span
+        );
+      });
     };
   }
 
-  private _startHttpSpan(name: string, options: SpanOptions) {
+  private _startHttpSpan(
+    name: string,
+    options: SpanOptions,
+    ctx = context.active()
+  ) {
     /*
-     * If a parent is required but not present, we use a `NoRecordingSpan` to still
+     * If a parent is required but not present, we use a `NoopSpan` to still
      * propagate context without recording it.
      */
     const requireParent =
@@ -580,16 +597,14 @@ export class HttpInstrumentation extends InstrumentationBase<Http> {
         : this._getConfig().requireParentforIncomingSpans;
 
     let span: Span;
-    const currentSpan = this.tracer.getCurrentSpan();
+    const currentSpan = trace.getSpan(ctx);
 
     if (requireParent === true && currentSpan === undefined) {
-      // TODO: Refactor this when a solution is found in
-      // https://github.com/open-telemetry/opentelemetry-specification/issues/530
-      span = new NoRecordingSpan(this._emptySpanContext);
-    } else if (requireParent === true && currentSpan?.context().isRemote) {
+      span = trace.wrapSpanContext(INVALID_SPAN_CONTEXT);
+    } else if (requireParent === true && currentSpan?.spanContext().isRemote) {
       span = currentSpan;
     } else {
-      span = this.tracer.startSpan(name, options);
+      span = this.tracer.startSpan(name, options, ctx);
     }
     this._spanNotEnded.add(span);
     return span;

@@ -16,11 +16,7 @@
 
 import * as assert from 'assert';
 import { JaegerExporter } from '../src';
-import {
-  ExportResult,
-  ExportResultCode,
-  NoopLogger,
-} from '@opentelemetry/core';
+import { ExportResult, ExportResultCode } from '@opentelemetry/core';
 import * as api from '@opentelemetry/api';
 import { ThriftProcess } from '../src/types';
 import { ReadableSpan } from '@opentelemetry/tracing';
@@ -31,7 +27,7 @@ import * as nock from 'nock';
 describe('JaegerExporter', () => {
   describe('constructor', () => {
     afterEach(() => {
-      delete process.env.JAEGER_AGENT_HOST;
+      delete process.env.OTEL_EXPORTER_JAEGER_AGENT_HOST;
     });
 
     it('should construct an exporter', () => {
@@ -48,7 +44,6 @@ describe('JaegerExporter', () => {
         serviceName: 'opentelemetry',
         host: 'remotehost',
         port: 8080,
-        logger: new NoopLogger(),
         tags: [{ key: 'opentelemetry-exporter-jaeger', value: '0.1.0' }],
       });
       assert.ok(typeof exporter.export === 'function');
@@ -71,7 +66,7 @@ describe('JaegerExporter', () => {
     });
 
     it('should respect jaeger host env variable', () => {
-      process.env.JAEGER_AGENT_HOST = 'env-set-host';
+      process.env.OTEL_EXPORTER_JAEGER_AGENT_HOST = 'env-set-host';
       const exporter = new JaegerExporter({
         serviceName: 'test-service',
       });
@@ -79,7 +74,7 @@ describe('JaegerExporter', () => {
     });
 
     it('should prioritize host option over env variable', () => {
-      process.env.JAEGER_AGENT_HOST = 'env-set-host';
+      process.env.OTEL_EXPORTER_JAEGER_AGENT_HOST = 'env-set-host';
       const exporter = new JaegerExporter({
         serviceName: 'test-service',
         host: 'option-set-host',
@@ -113,16 +108,18 @@ describe('JaegerExporter', () => {
     const readableSpan: ReadableSpan = {
       name: 'my-span1',
       kind: api.SpanKind.CLIENT,
-      spanContext: {
-        traceId: 'd4cda95b652f4a1592b449d5929fda1b',
-        spanId: '6e0c63257de34c92',
-        traceFlags: TraceFlags.NONE,
+      spanContext: () => {
+        return {
+          traceId: 'd4cda95b652f4a1592b449d5929fda1b',
+          spanId: '6e0c63257de34c92',
+          traceFlags: TraceFlags.NONE,
+        };
       },
       startTime: [1566156729, 709],
       endTime: [1566156731, 709],
       ended: true,
       status: {
-        code: api.StatusCode.ERROR,
+        code: api.SpanStatusCode.ERROR,
       },
       attributes: {},
       links: [],

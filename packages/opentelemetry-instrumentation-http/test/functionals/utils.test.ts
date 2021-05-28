@@ -14,14 +14,15 @@
  * limitations under the License.
  */
 import {
-  StatusCode,
+  SpanAttributes,
+  SpanStatusCode,
   ROOT_CONTEXT,
   SpanKind,
   TraceFlags,
+  context,
 } from '@opentelemetry/api';
-import { NoopLogger } from '@opentelemetry/core';
 import { BasicTracerProvider, Span } from '@opentelemetry/tracing';
-import { HttpAttribute } from '@opentelemetry/semantic-conventions';
+import { SemanticAttributes } from '@opentelemetry/semantic-conventions';
 import * as assert from 'assert';
 import * as http from 'http';
 import { IncomingMessage, ServerResponse } from 'http';
@@ -30,6 +31,9 @@ import * as sinon from 'sinon';
 import * as url from 'url';
 import { IgnoreMatcher } from '../../src/types';
 import * as utils from '../../src/utils';
+import { AttributeNames } from '../../src/enums/AttributeNames';
+import { RPCType, setRPCMetadata } from '@opentelemetry/core';
+import { AsyncHooksContextManager } from '@opentelemetry/context-async-hooks';
 
 describe('Utility', () => {
   describe('parseResponseStatus()', () => {
@@ -37,20 +41,20 @@ describe('Utility', () => {
       const status = utils.parseResponseStatus(
         (undefined as unknown) as number
       );
-      assert.deepStrictEqual(status, { code: StatusCode.ERROR });
+      assert.deepStrictEqual(status, { code: SpanStatusCode.ERROR });
     });
 
     it('should return OK for Success HTTP status code', () => {
       for (let index = 100; index < 400; index++) {
         const status = utils.parseResponseStatus(index);
-        assert.deepStrictEqual(status, { code: StatusCode.OK });
+        assert.deepStrictEqual(status, { code: SpanStatusCode.OK });
       }
     });
 
     it('should not return OK for Bad HTTP status code', () => {
       for (let index = 400; index <= 600; index++) {
         const status = utils.parseResponseStatus(index);
-        assert.notStrictEqual(status.code, StatusCode.OK);
+        assert.notStrictEqual(status.code, SpanStatusCode.OK);
       }
     });
   });
@@ -141,13 +145,12 @@ describe('Utility', () => {
   });
 
   describe('isIgnored()', () => {
-    let satisfiesPatternStub: sinon.SinonSpy<[string, IgnoreMatcher], boolean>;
     beforeEach(() => {
-      satisfiesPatternStub = sinon.spy(utils, 'satisfiesPattern');
+      sinon.spy(utils, 'satisfiesPattern');
     });
 
     afterEach(() => {
-      satisfiesPatternStub.restore();
+      sinon.restore();
     });
 
     it('should call isSatisfyPattern, n match', () => {
@@ -160,7 +163,6 @@ describe('Utility', () => {
     });
 
     it('should call isSatisfyPattern, match for function', () => {
-      satisfiesPatternStub.restore();
       const answer1 = utils.isIgnored('/test/1', [
         url => url.endsWith('/test/1'),
       ]);
@@ -168,10 +170,8 @@ describe('Utility', () => {
     });
 
     it('should not re-throw when function throws an exception', () => {
-      satisfiesPatternStub.restore();
-      const log = new NoopLogger();
       const onException = (e: Error) => {
-        log.error('error', e);
+        // Do nothing
       };
       for (const callback of [undefined, onException]) {
         assert.doesNotThrow(() =>
@@ -189,7 +189,6 @@ describe('Utility', () => {
     });
 
     it('should call onException when function throws an exception', () => {
-      satisfiesPatternStub.restore();
       const onException = sinon.spy();
       assert.doesNotThrow(() =>
         utils.isIgnored(
@@ -263,10 +262,10 @@ describe('Utility', () => {
         utils.setSpanWithError(span, new Error(errorMessage), obj as any);
         const attributes = span.attributes;
         assert.strictEqual(
-          attributes[HttpAttribute.HTTP_ERROR_MESSAGE],
+          attributes[AttributeNames.HTTP_ERROR_MESSAGE],
           errorMessage
         );
-        assert.ok(attributes[HttpAttribute.HTTP_ERROR_NAME]);
+        assert.ok(attributes[AttributeNames.HTTP_ERROR_NAME]);
       }
     });
   });
@@ -289,23 +288,181 @@ describe('Utility', () => {
   });
 
   describe('getIncomingRequestAttributesOnResponse()', () => {
-    it('should correctly parse the middleware stack if present', () => {
+    it('should correctly parse the middleware stack if present', done => {
+      context.setGlobalContextManager(new AsyncHooksContextManager().enable());
       const request = {
-        __ot_middlewares: ['/test', '/toto', '/'],
-      } as IncomingMessage & { __ot_middlewares?: string[] };
-
-      const attributes = utils.getIncomingRequestAttributesOnResponse(request, {
         socket: {},
-      } as ServerResponse & { socket: Socket });
-      assert.deepEqual(attributes[HttpAttribute.HTTP_ROUTE], '/test/toto');
+      } as IncomingMessage;
+      context.with(
+        setRPCMetadata(context.active(), {
+          type: RPCType.HTTP,
+          route: '/user/:id',
+          span: (null as unknown) as Span,
+        }),
+        () => {
+          const attributes = utils.getIncomingRequestAttributesOnResponse(
+            request,
+            {} as ServerResponse
+          );
+          assert.deepStrictEqual(
+            attributes[SemanticAttributes.HTTP_ROUTE],
+            '/user/:id'
+          );
+          context.disable();
+          return done();
+        }
+      );
     });
 
     it('should succesfully process without middleware stack', () => {
-      const request = {} as IncomingMessage;
+      const request = {
+        socket: {},
+      } as IncomingMessage;
       const attributes = utils.getIncomingRequestAttributesOnResponse(request, {
         socket: {},
       } as ServerResponse & { socket: Socket });
-      assert.deepEqual(attributes[HttpAttribute.HTTP_ROUTE], undefined);
+      assert.deepEqual(attributes[SemanticAttributes.HTTP_ROUTE], undefined);
+    });
+  });
+  // Verify the key in the given attributes is set to the given value,
+  // and that no other HTTP Content Length attributes are set.
+  function verifyValueInAttributes(
+    attributes: SpanAttributes,
+    key: string | undefined,
+    value: number
+  ) {
+    const SemanticAttributess = [
+      SemanticAttributes.HTTP_RESPONSE_CONTENT_LENGTH_UNCOMPRESSED,
+      SemanticAttributes.HTTP_RESPONSE_CONTENT_LENGTH,
+      SemanticAttributes.HTTP_REQUEST_CONTENT_LENGTH_UNCOMPRESSED,
+      SemanticAttributes.HTTP_REQUEST_CONTENT_LENGTH,
+    ];
+
+    for (const attr of SemanticAttributess) {
+      if (attr === key) {
+        assert.strictEqual(attributes[attr], value);
+      } else {
+        assert.strictEqual(attributes[attr], undefined);
+      }
+    }
+  }
+
+  describe('setRequestContentLengthAttributes()', () => {
+    it('should set request content-length uncompressed attribute with no content-encoding header', () => {
+      const attributes: SpanAttributes = {};
+      const request = {} as IncomingMessage;
+
+      request.headers = {
+        'content-length': '1200',
+      };
+      utils.setRequestContentLengthAttribute(request, attributes);
+
+      verifyValueInAttributes(
+        attributes,
+        SemanticAttributes.HTTP_REQUEST_CONTENT_LENGTH_UNCOMPRESSED,
+        1200
+      );
+    });
+
+    it('should set request content-length uncompressed attribute with "identity" content-encoding header', () => {
+      const attributes: SpanAttributes = {};
+      const request = {} as IncomingMessage;
+      request.headers = {
+        'content-length': '1200',
+        'content-encoding': 'identity',
+      };
+      utils.setRequestContentLengthAttribute(request, attributes);
+
+      verifyValueInAttributes(
+        attributes,
+        SemanticAttributes.HTTP_REQUEST_CONTENT_LENGTH_UNCOMPRESSED,
+        1200
+      );
+    });
+
+    it('should set request content-length compressed attribute with "gzip" content-encoding header', () => {
+      const attributes: SpanAttributes = {};
+      const request = {} as IncomingMessage;
+      request.headers = {
+        'content-length': '1200',
+        'content-encoding': 'gzip',
+      };
+      utils.setRequestContentLengthAttribute(request, attributes);
+
+      verifyValueInAttributes(
+        attributes,
+        SemanticAttributes.HTTP_REQUEST_CONTENT_LENGTH,
+        1200
+      );
+    });
+  });
+
+  describe('setResponseContentLengthAttributes()', () => {
+    it('should set response content-length uncompressed attribute with no content-encoding header', () => {
+      const attributes: SpanAttributes = {};
+
+      const response = {} as IncomingMessage;
+
+      response.headers = {
+        'content-length': '1200',
+      };
+      utils.setResponseContentLengthAttribute(response, attributes);
+
+      verifyValueInAttributes(
+        attributes,
+        SemanticAttributes.HTTP_RESPONSE_CONTENT_LENGTH_UNCOMPRESSED,
+        1200
+      );
+    });
+
+    it('should set response content-length uncompressed attribute with "identity" content-encoding header', () => {
+      const attributes: SpanAttributes = {};
+
+      const response = {} as IncomingMessage;
+
+      response.headers = {
+        'content-length': '1200',
+        'content-encoding': 'identity',
+      };
+
+      utils.setResponseContentLengthAttribute(response, attributes);
+
+      verifyValueInAttributes(
+        attributes,
+        SemanticAttributes.HTTP_RESPONSE_CONTENT_LENGTH_UNCOMPRESSED,
+        1200
+      );
+    });
+
+    it('should set response content-length compressed attribute with "gzip" content-encoding header', () => {
+      const attributes: SpanAttributes = {};
+
+      const response = {} as IncomingMessage;
+
+      response.headers = {
+        'content-length': '1200',
+        'content-encoding': 'gzip',
+      };
+
+      utils.setResponseContentLengthAttribute(response, attributes);
+
+      verifyValueInAttributes(
+        attributes,
+        SemanticAttributes.HTTP_RESPONSE_CONTENT_LENGTH,
+        1200
+      );
+    });
+
+    it('should set no attributes with no content-length header', () => {
+      const attributes: SpanAttributes = {};
+      const message = {} as IncomingMessage;
+
+      message.headers = {
+        'content-encoding': 'gzip',
+      };
+      utils.setResponseContentLengthAttribute(message, attributes);
+
+      verifyValueInAttributes(attributes, undefined, 1200);
     });
   });
 });

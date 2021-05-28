@@ -1,5 +1,6 @@
 'use strict';
 
+const api = require('@opentelemetry/api');
 const tracer = require('./tracer')('example-grpc-client');
 // eslint-disable-next-line import/order
 const grpc = require('grpc');
@@ -14,8 +15,8 @@ function main() {
   // the span, which is created to track work that happens outside of the
   // request lifecycle entirely.
   const span = tracer.startSpan('client.js:main()');
-  tracer.withSpan(span, () => {
-    console.log('Client traceId ', span.context().traceId);
+  api.context.with(api.trace.setSpan(api.context.active(), span), () => {
+    console.log('Client traceId ', span.spanContext().traceId);
     const client = new services.GreeterClient(
       `localhost:${PORT}`,
       grpc.credentials.createInsecure(),

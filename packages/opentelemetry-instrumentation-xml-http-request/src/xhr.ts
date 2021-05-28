@@ -19,9 +19,10 @@ import {
   isWrapped,
   InstrumentationBase,
   InstrumentationConfig,
+  safeExecuteInTheMiddle,
 } from '@opentelemetry/instrumentation';
 import { hrTime, isUrlIgnored, otperformance } from '@opentelemetry/core';
-import { HttpAttribute } from '@opentelemetry/semantic-conventions';
+import { SemanticAttributes } from '@opentelemetry/semantic-conventions';
 import {
   addSpanNetworkEvents,
   getResource,
@@ -37,12 +38,18 @@ import {
   XhrMem,
 } from './types';
 import { VERSION } from './version';
+import { AttributeNames } from './enums/AttributeNames';
 
 // how long to wait for observer to collect information about resources
 // this is needed as event "load" is called before observer
 // hard to say how long it should really wait, seems like 300ms is
 // safe enough
 const OBSERVER_WAIT_TIME_MS = 300;
+
+export type XHRCustomAttributeFunction = (
+  span: api.Span,
+  xhr: XMLHttpRequest
+) => void;
 
 /**
  * XMLHttpRequest config
@@ -63,6 +70,8 @@ export interface XMLHttpRequestInstrumentationConfig
    * also not be traced.
    */
   ignoreUrls?: Array<string | RegExp>;
+  /** Function for adding custom attributes on the span */
+  applyCustomAttributesOnSpan?: XHRCustomAttributeFunction;
 }
 
 /**
@@ -106,6 +115,11 @@ export class XMLHttpRequestInstrumentation extends InstrumentationBase<XMLHttpRe
         this._getConfig().propagateTraceHeaderCorsUrls
       )
     ) {
+      const headers: Partial<Record<string, unknown>> = {};
+      api.propagation.inject(api.context.active(), headers);
+      if (Object.keys(headers).length > 0) {
+        api.diag.debug('headers inject skipped due to CORS policy');
+      }
       return;
     }
     const headers: { [key: string]: unknown } = {};
@@ -125,7 +139,7 @@ export class XMLHttpRequestInstrumentation extends InstrumentationBase<XMLHttpRe
     span: api.Span,
     corsPreFlightRequest: PerformanceResourceTiming
   ): void {
-    this.tracer.withSpan(span, () => {
+    api.context.with(api.trace.setSpan(api.context.active(), span), () => {
       const childSpan = this.tracer.startSpan('CORS Preflight', {
         startTime: corsPreFlightRequest[PTN.FETCH_START],
       });
@@ -144,18 +158,42 @@ export class XMLHttpRequestInstrumentation extends InstrumentationBase<XMLHttpRe
   _addFinalSpanAttributes(span: api.Span, xhrMem: XhrMem, spanUrl?: string) {
     if (typeof spanUrl === 'string') {
       const parsedUrl = parseUrl(spanUrl);
-
-      span.setAttribute(HttpAttribute.HTTP_STATUS_CODE, xhrMem.status);
-      span.setAttribute(HttpAttribute.HTTP_STATUS_TEXT, xhrMem.statusText);
-      span.setAttribute(HttpAttribute.HTTP_HOST, parsedUrl.host);
+      if (xhrMem.status !== undefined) {
+        span.setAttribute(SemanticAttributes.HTTP_STATUS_CODE, xhrMem.status);
+      }
+      if (xhrMem.statusText !== undefined) {
+        span.setAttribute(AttributeNames.HTTP_STATUS_TEXT, xhrMem.statusText);
+      }
+      span.setAttribute(SemanticAttributes.HTTP_HOST, parsedUrl.host);
       span.setAttribute(
-        HttpAttribute.HTTP_SCHEME,
+        SemanticAttributes.HTTP_SCHEME,
         parsedUrl.protocol.replace(':', '')
       );
 
       // @TODO do we want to collect this or it will be collected earlier once only or
       //    maybe when parent span is not available ?
-      span.setAttribute(HttpAttribute.HTTP_USER_AGENT, navigator.userAgent);
+      span.setAttribute(
+        SemanticAttributes.HTTP_USER_AGENT,
+        navigator.userAgent
+      );
+    }
+  }
+
+  private _applyAttributesAfterXHR(span: api.Span, xhr: XMLHttpRequest) {
+    const applyCustomAttributesOnSpan = this._getConfig()
+      .applyCustomAttributesOnSpan;
+    if (typeof applyCustomAttributesOnSpan === 'function') {
+      safeExecuteInTheMiddle(
+        () => applyCustomAttributesOnSpan(span, xhr),
+        error => {
+          if (!error) {
+            return;
+          }
+
+          api.diag.error('applyCustomAttributesOnSpan', error);
+        },
+        true
+      );
     }
   }
 
@@ -289,7 +327,7 @@ export class XMLHttpRequestInstrumentation extends InstrumentationBase<XMLHttpRe
     method: string
   ): api.Span | undefined {
     if (isUrlIgnored(url, this._getConfig().ignoreUrls)) {
-      this._logger.debug('ignoring span as url matches ignored url');
+      api.diag.debug('ignoring span as url matches ignored url');
       return;
     }
     const spanName = `HTTP ${method.toUpperCase()}`;
@@ -297,8 +335,8 @@ export class XMLHttpRequestInstrumentation extends InstrumentationBase<XMLHttpRe
     const currentSpan = this.tracer.startSpan(spanName, {
       kind: api.SpanKind.CLIENT,
       attributes: {
-        [HttpAttribute.HTTP_METHOD]: method,
-        [HttpAttribute.HTTP_URL]: url,
+        [SemanticAttributes.HTTP_METHOD]: method,
+        [SemanticAttributes.HTTP_URL]: url,
       },
     });
 
@@ -386,6 +424,10 @@ export class XMLHttpRequestInstrumentation extends InstrumentationBase<XMLHttpRe
       xhrMem.status = xhr.status;
       xhrMem.statusText = xhr.statusText;
       plugin._xhrMem.delete(xhr);
+
+      if (xhrMem.span) {
+        plugin._applyAttributesAfterXHR(xhrMem.span, xhr);
+      }
       const endTime = hrTime();
 
       // the timeout is needed as observer doesn't have yet information
@@ -437,25 +479,28 @@ export class XMLHttpRequestInstrumentation extends InstrumentationBase<XMLHttpRe
         const spanUrl = xhrMem.spanUrl;
 
         if (currentSpan && spanUrl) {
-          plugin.tracer.withSpan(currentSpan, () => {
-            plugin._tasksCount++;
-            xhrMem.sendStartTime = hrTime();
-            currentSpan.addEvent(EventNames.METHOD_SEND);
+          api.context.with(
+            api.trace.setSpan(api.context.active(), currentSpan),
+            () => {
+              plugin._tasksCount++;
+              xhrMem.sendStartTime = hrTime();
+              currentSpan.addEvent(EventNames.METHOD_SEND);
 
-            this.addEventListener('abort', onAbort);
-            this.addEventListener('error', onError);
-            this.addEventListener('load', onLoad);
-            this.addEventListener('timeout', onTimeout);
+              this.addEventListener('abort', onAbort);
+              this.addEventListener('error', onError);
+              this.addEventListener('load', onLoad);
+              this.addEventListener('timeout', onTimeout);
 
-            xhrMem.callbackToRemoveEvents = () => {
-              unregister(this);
-              if (xhrMem.createdResources) {
-                xhrMem.createdResources.observer.disconnect();
-              }
-            };
-            plugin._addHeaders(this, spanUrl);
-            plugin._addResourceObserver(this, spanUrl);
-          });
+              xhrMem.callbackToRemoveEvents = () => {
+                unregister(this);
+                if (xhrMem.createdResources) {
+                  xhrMem.createdResources.observer.disconnect();
+                }
+              };
+              plugin._addHeaders(this, spanUrl);
+              plugin._addResourceObserver(this, spanUrl);
+            }
+          );
         }
         return original.apply(this, args);
       };
@@ -466,16 +511,16 @@ export class XMLHttpRequestInstrumentation extends InstrumentationBase<XMLHttpRe
    * implements enable function
    */
   enable() {
-    this._logger.debug('applying patch to', this.moduleName, this.version);
+    api.diag.debug('applying patch to', this.moduleName, this.version);
 
     if (isWrapped(XMLHttpRequest.prototype.open)) {
       this._unwrap(XMLHttpRequest.prototype, 'open');
-      this._logger.debug('removing previous patch from method open');
+      api.diag.debug('removing previous patch from method open');
     }
 
     if (isWrapped(XMLHttpRequest.prototype.send)) {
       this._unwrap(XMLHttpRequest.prototype, 'send');
-      this._logger.debug('removing previous patch from method send');
+      api.diag.debug('removing previous patch from method send');
     }
 
     this._wrap(XMLHttpRequest.prototype, 'open', this._patchOpen());
@@ -486,7 +531,7 @@ export class XMLHttpRequestInstrumentation extends InstrumentationBase<XMLHttpRe
    * implements disable function
    */
   disable() {
-    this._logger.debug('removing patch from', this.moduleName, this.version);
+    api.diag.debug('removing patch from', this.moduleName, this.version);
 
     this._unwrap(XMLHttpRequest.prototype, 'open');
     this._unwrap(XMLHttpRequest.prototype, 'send');

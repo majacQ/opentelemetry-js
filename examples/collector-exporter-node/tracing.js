@@ -1,15 +1,18 @@
 'use strict';
 
 const opentelemetry = require('@opentelemetry/api');
-// const { ConsoleLogger,  LogLevel} = require('@opentelemetry/core');
 const { BasicTracerProvider, ConsoleSpanExporter, SimpleSpanProcessor } = require('@opentelemetry/tracing');
 const { CollectorTraceExporter } = require('@opentelemetry/exporter-collector');
 // const { CollectorTraceExporter } = require('@opentelemetry/exporter-collector-grpc');
 // const { CollectorTraceExporter } = require('@opentelemetry/exporter-collector-proto');
 
+// opentelemetry.diag.setLogger(
+//   new opentelemetry.DiagConsoleLogger(),
+//   opentelemetry.DiagLogLevel.DEBUG,
+// );
+
 const exporter = new CollectorTraceExporter({
   serviceName: 'basic-service',
-  // logger: new ConsoleLogger(LogLevel.DEBUG),
   // headers: {
   //   foo: 'bar'
   // },
@@ -39,9 +42,8 @@ setTimeout(() => {
 function doWork(parent) {
   // Start another span. In this example, the main method already started a
   // span, so that'll be the parent span, and this will be a child span.
-  const span = tracer.startSpan('doWork', {
-    parent,
-  });
+  const ctx = opentelemetry.trace.setSpan(opentelemetry.context.active(), parent);
+  const span = tracer.startSpan('doWork', undefined, ctx);
 
   // simulate some random work.
   for (let i = 0; i <= Math.floor(Math.random() * 40000000); i += 1) {

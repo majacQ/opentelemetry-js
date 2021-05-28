@@ -22,7 +22,6 @@ import {
   assertCloudResource,
   assertHostResource,
 } from '@opentelemetry/resources/test/util/resource-assertions';
-import { NoopLogger } from '@opentelemetry/core';
 
 const AWS_HOST = 'http://' + awsEc2Detector.AWS_IDMS_ENDPOINT;
 const AWS_TOKEN_PATH = awsEc2Detector.AWS_INSTANCE_TOKEN_DOCUMENT_PATH;
@@ -65,13 +64,12 @@ describe('awsEc2Detector', () => {
         .matchHeader(AWS_METADATA_TOKEN_HEADER, mockedTokenResponse)
         .reply(200, () => mockedHostResponse);
 
-      const resource: Resource = await awsEc2Detector.detect({
-        logger: new NoopLogger(),
-      });
+      const resource: Resource = await awsEc2Detector.detect();
 
       scope.done();
 
       assert.ok(resource);
+
       assertCloudResource(resource, {
         provider: 'aws',
         accountId: 'my-account-id',
@@ -103,9 +101,7 @@ describe('awsEc2Detector', () => {
         .reply(404, () => new Error());
 
       try {
-        await awsEc2Detector.detect({
-          logger: new NoopLogger(),
-        });
+        await awsEc2Detector.detect();
         assert.ok(false, 'Expected to throw');
       } catch (err) {
         assert.deepStrictEqual(err, expectedError);
@@ -129,9 +125,7 @@ describe('awsEc2Detector', () => {
         .reply(200, () => mockedHostResponse);
 
       try {
-        await awsEc2Detector.detect({
-          logger: new NoopLogger(),
-        });
+        await awsEc2Detector.detect();
         assert.ok(false, 'Expected to throw');
       } catch (err) {
         assert.deepStrictEqual(err, expectedError);
@@ -151,9 +145,7 @@ describe('awsEc2Detector', () => {
         .replyWithError(expectedError.message);
 
       try {
-        await awsEc2Detector.detect({
-          logger: new NoopLogger(),
-        });
+        await awsEc2Detector.detect();
         assert.ok(false, 'Expected to throw');
       } catch (err) {
         assert.deepStrictEqual(err, expectedError);

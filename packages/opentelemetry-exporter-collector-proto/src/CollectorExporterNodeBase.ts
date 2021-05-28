@@ -14,6 +14,7 @@
  * limitations under the License.
  */
 
+import { diag } from '@opentelemetry/api';
 import {
   CollectorExporterNodeBase as CollectorExporterBaseMain,
   collectorTypes,
@@ -35,7 +36,7 @@ export abstract class CollectorExporterNodeBase<
     onSuccess: () => void,
     onError: (error: collectorTypes.CollectorExporterError) => void
   ): void {
-    const promise = new Promise(resolve => {
+    const promise = new Promise<void>(resolve => {
       const _onSuccess = (): void => {
         onSuccess();
         _onFinish();
@@ -73,7 +74,7 @@ export abstract class CollectorExporterNodeBase<
     onError: (error: collectorTypes.CollectorExporterError) => void
   ): void {
     if (this._isShutdown) {
-      this.logger.debug('Shutdown already started. Cannot send objects');
+      diag.debug('Shutdown already started. Cannot send objects');
       return;
     }
     if (!this._send) {

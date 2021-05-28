@@ -14,11 +14,8 @@
  * limitations under the License.
  */
 import * as api from '@opentelemetry/api';
-import {
-  LogLevel,
-  otperformance as performance,
-  isWrapped,
-} from '@opentelemetry/core';
+import { otperformance as performance, isWrapped } from '@opentelemetry/core';
+import { registerInstrumentations } from '@opentelemetry/instrumentation';
 import {
   B3Propagator,
   B3InjectEncoding,
@@ -28,7 +25,7 @@ import {
 } from '@opentelemetry/propagator-b3';
 import { ZoneContextManager } from '@opentelemetry/context-zone';
 import * as tracing from '@opentelemetry/tracing';
-import { HttpAttribute } from '@opentelemetry/semantic-conventions';
+import { SemanticAttributes } from '@opentelemetry/semantic-conventions';
 import {
   PerformanceTimingNames as PTN,
   WebTracerProvider,
@@ -37,7 +34,11 @@ import {
 import * as assert from 'assert';
 import * as sinon from 'sinon';
 import { EventNames } from '../src/enums/EventNames';
-import { XMLHttpRequestInstrumentation } from '../src/xhr';
+import {
+  XMLHttpRequestInstrumentation,
+  XMLHttpRequestInstrumentationConfig,
+} from '../src/xhr';
+import { AttributeNames } from '../src/enums/AttributeNames';
 
 class DummySpanExporter implements tracing.SpanExporter {
   export(spans: any) {}
@@ -56,7 +57,7 @@ const getData = (
   async?: boolean
 ) => {
   // eslint-disable-next-line no-async-promise-executor
-  return new Promise(async (resolve, reject) => {
+  return new Promise<void>(async (resolve, reject) => {
     if (async === undefined) {
       async = true;
     }
@@ -129,7 +130,6 @@ describe('xhr', () => {
   asyncTests.forEach(test => {
     const testAsync = test.async;
     describe(`when async='${testAsync}'`, () => {
-      let sandbox: sinon.SinonSandbox;
       let requests: any[] = [];
       let prepareData: any;
       let clearData: any;
@@ -150,6 +150,10 @@ describe('xhr', () => {
         );
       });
 
+      after(() => {
+        api.propagation.disable();
+      });
+
       describe('when request is successful', () => {
         let webTracerWithZone: api.Tracer;
         let webTracerProviderWithZone: WebTracerProvider;
@@ -164,20 +168,22 @@ describe('xhr', () => {
 
         clearData = () => {
           requests = [];
-          sandbox.restore();
-          spyEntries.restore();
+          sinon.restore();
         };
 
-        prepareData = (done: any, fileUrl: string, config?: any) => {
-          sandbox = sinon.createSandbox();
-          const fakeXhr = sandbox.useFakeXMLHttpRequest();
+        prepareData = (
+          done: any,
+          fileUrl: string,
+          config?: XMLHttpRequestInstrumentationConfig
+        ) => {
+          const fakeXhr = sinon.useFakeXMLHttpRequest();
           fakeXhr.onCreate = function (xhr: any) {
             requests.push(xhr);
           };
-          sandbox.useFakeTimers();
+          sinon.useFakeTimers();
 
-          sandbox.stub(performance, 'timeOrigin').value(0);
-          sandbox.stub(performance, 'now').callsFake(() => fakeNow);
+          sinon.stub(performance, 'timeOrigin').value(0);
+          sinon.stub(performance, 'now').callsFake(() => fakeNow);
 
           const resources: PerformanceResourceTiming[] = [];
           resources.push(
@@ -189,7 +195,7 @@ describe('xhr', () => {
             })
           );
 
-          spyEntries = sandbox.stub(
+          spyEntries = sinon.stub(
             (performance as unknown) as Performance,
             'getEntriesByType'
           );
@@ -197,14 +203,15 @@ describe('xhr', () => {
           xmlHttpRequestInstrumentation = new XMLHttpRequestInstrumentation(
             config
           );
-          webTracerProviderWithZone = new WebTracerProvider({
-            logLevel: LogLevel.ERROR,
-            plugins: [xmlHttpRequestInstrumentation],
+          webTracerProviderWithZone = new WebTracerProvider();
+          registerInstrumentations({
+            instrumentations: [xmlHttpRequestInstrumentation],
+            tracerProvider: webTracerProviderWithZone,
           });
           webTracerWithZone = webTracerProviderWithZone.getTracer('xhr-test');
           dummySpanExporter = new DummySpanExporter();
           exportSpy = sinon.stub(dummySpanExporter, 'export');
-          clearResourceTimingsSpy = sandbox.stub(
+          clearResourceTimingsSpy = sinon.stub(
             (performance as unknown) as Performance,
             'clearResourceTimings'
           );
@@ -213,7 +220,7 @@ describe('xhr', () => {
           );
 
           rootSpan = webTracerWithZone.startSpan('root');
-          webTracerWithZone.withSpan(rootSpan, () => {
+          api.context.with(api.trace.setSpan(api.context.active(), rootSpan), () => {
             getData(
               new XMLHttpRequest(),
               fileUrl,
@@ -223,7 +230,7 @@ describe('xhr', () => {
               testAsync
             ).then(() => {
               fakeNow = 0;
-              sandbox.clock.tick(1000);
+              sinon.clock.tick(1000);
               done();
             });
             assert.strictEqual(requests.length, 1, 'request not called');
@@ -263,7 +270,7 @@ describe('xhr', () => {
           const span: tracing.ReadableSpan = exportSpy.args[1][0][0];
           assert.strictEqual(
             span.parentSpanId,
-            rootSpan.context().spanId,
+            rootSpan.spanContext().spanId,
             'parent span is not root span'
           );
         });
@@ -290,39 +297,39 @@ describe('xhr', () => {
           assert.strictEqual(
             attributes[keys[0]],
             'GET',
-            `attributes ${HttpAttribute.HTTP_METHOD} is wrong`
+            `attributes ${SemanticAttributes.HTTP_METHOD} is wrong`
           );
           assert.strictEqual(
             attributes[keys[1]],
             url,
-            `attributes ${HttpAttribute.HTTP_URL} is wrong`
+            `attributes ${SemanticAttributes.HTTP_URL} is wrong`
           );
           assert.ok(
             (attributes[keys[2]] as number) > 0,
-            'attributes ${HttpAttributes.HTTP_RESPONSE_CONTENT_SIZE} <= 0'
+            'attributes ${SemanticAttributess.HTTP_RESPONSE_CONTENT_SIZE} <= 0'
           );
           assert.strictEqual(
             attributes[keys[3]],
             200,
-            `attributes ${HttpAttribute.HTTP_STATUS_CODE} is wrong`
+            `attributes ${SemanticAttributes.HTTP_STATUS_CODE} is wrong`
           );
           assert.strictEqual(
             attributes[keys[4]],
             'OK',
-            `attributes ${HttpAttribute.HTTP_STATUS_TEXT} is wrong`
+            `attributes ${AttributeNames.HTTP_STATUS_TEXT} is wrong`
           );
           assert.strictEqual(
             attributes[keys[5]],
             parseUrl(url).host,
-            `attributes ${HttpAttribute.HTTP_HOST} is wrong`
+            `attributes ${SemanticAttributes.HTTP_HOST} is wrong`
           );
           assert.ok(
             attributes[keys[6]] === 'http' || attributes[keys[6]] === 'https',
-            `attributes ${HttpAttribute.HTTP_SCHEME} is wrong`
+            `attributes ${SemanticAttributes.HTTP_SCHEME} is wrong`
           );
           assert.ok(
             attributes[keys[7]] !== '',
-            `attributes ${HttpAttribute.HTTP_USER_AGENT} is not defined`
+            `attributes ${SemanticAttributes.HTTP_USER_AGENT} is not defined`
           );
 
           assert.strictEqual(keys.length, 8, 'number of attributes is wrong');
@@ -401,7 +408,7 @@ describe('xhr', () => {
           const parentSpan: tracing.ReadableSpan = exportSpy.args[1][0][0];
           assert.strictEqual(
             span.parentSpanId,
-            parentSpan.spanContext.spanId,
+            parentSpan.spanContext().spanId,
             'parent span is not root span'
           );
         });
@@ -497,17 +504,17 @@ describe('xhr', () => {
             const span: api.Span = exportSpy.args[0][0][0];
             assert.strictEqual(
               requests[0].requestHeaders[X_B3_TRACE_ID],
-              span.context().traceId,
+              span.spanContext().traceId,
               `trace header '${X_B3_TRACE_ID}' not set`
             );
             assert.strictEqual(
               requests[0].requestHeaders[X_B3_SPAN_ID],
-              span.context().spanId,
+              span.spanContext().spanId,
               `trace header '${X_B3_SPAN_ID}' not set`
             );
             assert.strictEqual(
               requests[0].requestHeaders[X_B3_SAMPLED],
-              String(span.context().traceFlags),
+              String(span.spanContext().traceFlags),
               `trace header '${X_B3_SAMPLED}' not set`
             );
           });
@@ -530,17 +537,17 @@ describe('xhr', () => {
               const span: api.Span = exportSpy.args[1][0][0];
               assert.strictEqual(
                 requests[0].requestHeaders[X_B3_TRACE_ID],
-                span.context().traceId,
+                span.spanContext().traceId,
                 `trace header '${X_B3_TRACE_ID}' not set`
               );
               assert.strictEqual(
                 requests[0].requestHeaders[X_B3_SPAN_ID],
-                span.context().spanId,
+                span.spanContext().spanId,
                 `trace header '${X_B3_SPAN_ID}' not set`
               );
               assert.strictEqual(
                 requests[0].requestHeaders[X_B3_SAMPLED],
-                String(span.context().traceFlags),
+                String(span.spanContext().traceFlags),
                 `trace header '${X_B3_SAMPLED}' not set`
               );
             });
@@ -550,7 +557,12 @@ describe('xhr', () => {
           'AND origin does NOT match window.location And does NOT match' +
             ' with propagateTraceHeaderCorsUrls',
           () => {
+            let spyDebug: sinon.SinonSpy;
             beforeEach(done => {
+              const diagLogger = new api.DiagConsoleLogger();
+              spyDebug = sinon.spy();
+              diagLogger.debug = spyDebug;
+              api.diag.setLogger(diagLogger, api.DiagLogLevel.ALL);
               clearData();
               prepareData(
                 done,
@@ -572,6 +584,13 @@ describe('xhr', () => {
                 requests[0].requestHeaders[X_B3_SAMPLED],
                 undefined,
                 `trace header '${X_B3_SAMPLED}' should not be set`
+              );
+            });
+
+            it('should debug info that injecting headers was skipped', () => {
+              assert.strictEqual(
+                spyDebug.lastCall.args[0],
+                'headers inject skipped due to CORS policy'
               );
             });
           }
@@ -626,46 +645,52 @@ describe('xhr', () => {
               })
             );
             const reusableReq = new XMLHttpRequest();
-            webTracerWithZone.withSpan(rootSpan, () => {
-              getData(
-                reusableReq,
-                firstUrl,
-                () => {
-                  fakeNow = 100;
-                },
-                testAsync
-              ).then(() => {
-                fakeNow = 0;
-                sandbox.clock.tick(1000);
-              });
-            });
+            api.context.with(
+              api.trace.setSpan(api.context.active(), rootSpan),
+              () => {
+                getData(
+                  reusableReq,
+                  firstUrl,
+                  () => {
+                    fakeNow = 100;
+                  },
+                  testAsync
+                ).then(() => {
+                  fakeNow = 0;
+                  sinon.clock.tick(1000);
+                });
+              }
+            );
 
-            webTracerWithZone.withSpan(rootSpan, () => {
-              getData(
-                reusableReq,
-                secondUrl,
-                () => {
-                  fakeNow = 100;
-                },
-                testAsync
-              ).then(() => {
-                fakeNow = 0;
-                sandbox.clock.tick(1000);
-                done();
-              });
+            api.context.with(
+              api.trace.setSpan(api.context.active(), rootSpan),
+              () => {
+                getData(
+                  reusableReq,
+                  secondUrl,
+                  () => {
+                    fakeNow = 100;
+                  },
+                  testAsync
+                ).then(() => {
+                  fakeNow = 0;
+                  sinon.clock.tick(1000);
+                  done();
+                });
 
-              assert.strictEqual(
-                requests.length,
-                1,
-                'first request not called'
-              );
+                assert.strictEqual(
+                  requests.length,
+                  1,
+                  'first request not called'
+                );
 
-              requests[0].respond(
-                200,
-                { 'Content-Type': 'application/json' },
-                '{"foo":"bar"}'
-              );
-            });
+                requests[0].respond(
+                  200,
+                  { 'Content-Type': 'application/json' },
+                  '{"foo":"bar"}'
+                );
+              }
+            );
           });
 
           it('should clear previous span information', () => {
@@ -676,8 +701,31 @@ describe('xhr', () => {
             assert.strictEqual(
               attributes[keys[1]],
               secondUrl,
-              `attribute ${HttpAttribute.HTTP_URL} is wrong`
+              `attribute ${SemanticAttributes.HTTP_URL} is wrong`
             );
+          });
+        });
+
+        describe('and applyCustomAttributesOnSpan hook is configured', () => {
+          beforeEach(done => {
+            clearData();
+            const propagateTraceHeaderCorsUrls = [url];
+            prepareData(done, url, {
+              propagateTraceHeaderCorsUrls,
+              applyCustomAttributesOnSpan: function (
+                span: api.Span,
+                xhr: XMLHttpRequest
+              ) {
+                const res = JSON.parse(xhr.response);
+                span.setAttribute('xhr-custom-attribute', res.foo);
+              },
+            });
+          });
+
+          it('span should have custom attribute', () => {
+            const span: tracing.ReadableSpan = exportSpy.args[1][0][0];
+            const attributes = span.attributes;
+            assert.ok(attributes['xhr-custom-attribute'] === 'bar');
           });
         });
       });
@@ -693,17 +741,18 @@ describe('xhr', () => {
           'https://raw.githubusercontent.com/open-telemetry/opentelemetry-js/master/package.json';
         let fakeNow = 0;
 
-        beforeEach(() => {
-          sandbox = sinon.createSandbox();
-          const fakeXhr = sandbox.useFakeXMLHttpRequest();
+        const prepareData = function (
+          config: XMLHttpRequestInstrumentationConfig = {}
+        ) {
+          const fakeXhr = sinon.useFakeXMLHttpRequest();
           fakeXhr.onCreate = function (xhr: any) {
             requests.push(xhr);
           };
 
-          sandbox.useFakeTimers();
+          sinon.useFakeTimers();
 
-          sandbox.stub(performance, 'timeOrigin').value(0);
-          sandbox.stub(performance, 'now').callsFake(() => fakeNow);
+          sinon.stub(performance, 'timeOrigin').value(0);
+          sinon.stub(performance, 'now').callsFake(() => fakeNow);
 
           const resources: PerformanceResourceTiming[] = [];
           resources.push(
@@ -712,16 +761,19 @@ describe('xhr', () => {
             })
           );
 
-          spyEntries = sandbox.stub(
+          spyEntries = sinon.stub(
             (performance as unknown) as Performance,
             'getEntriesByType'
           );
           spyEntries.withArgs('resource').returns(resources);
 
-          webTracerWithZoneProvider = new WebTracerProvider({
-            logLevel: LogLevel.ERROR,
-            plugins: [new XMLHttpRequestInstrumentation()],
+          webTracerWithZoneProvider = new WebTracerProvider();
+
+          registerInstrumentations({
+            instrumentations: [new XMLHttpRequestInstrumentation(config)],
+            tracerProvider: webTracerWithZoneProvider,
           });
+
           dummySpanExporter = new DummySpanExporter();
           exportSpy = sinon.stub(dummySpanExporter, 'export');
           webTracerWithZoneProvider.addSpanProcessor(
@@ -730,34 +782,89 @@ describe('xhr', () => {
           webTracerWithZone = webTracerWithZoneProvider.getTracer('xhr-test');
 
           rootSpan = webTracerWithZone.startSpan('root');
+        };
+
+        beforeEach(() => {
+          prepareData();
         });
 
         afterEach(() => {
           clearData();
         });
 
+        function timedOutRequest(done: any) {
+          api.context.with(api.trace.setSpan(api.context.active(), rootSpan), () => {
+            void getData(
+              new XMLHttpRequest(),
+              url,
+              () => {
+                sinon.clock.tick(XHR_TIMEOUT);
+              },
+              testAsync
+            ).then(() => {
+              fakeNow = 0;
+              sinon.clock.tick(1000);
+              done();
+            });
+          });
+        }
+
+        function abortedRequest(done: any) {
+          api.context.with(api.trace.setSpan(api.context.active(), rootSpan), () => {
+            void getData(new XMLHttpRequest(), url, () => {}, testAsync).then(
+              () => {
+                fakeNow = 0;
+                sinon.clock.tick(1000);
+                done();
+              }
+            );
+
+            assert.strictEqual(requests.length, 1, 'request not called');
+            requests[0].abort();
+          });
+        }
+
+        function erroredRequest(done: any) {
+          api.context.with(api.trace.setSpan(api.context.active(), rootSpan), () => {
+            void getData(
+              new XMLHttpRequest(),
+              url,
+              () => {
+                fakeNow = 100;
+              },
+              testAsync
+            ).then(() => {
+              fakeNow = 0;
+              sinon.clock.tick(1000);
+              done();
+            });
+            assert.strictEqual(requests.length, 1, 'request not called');
+            requests[0].respond(
+              400,
+              { 'Content-Type': 'text/plain' },
+              'Bad Request'
+            );
+          });
+        }
+
+        function networkErrorRequest(done: any) {
+          api.context.with(api.trace.setSpan(api.context.active(), rootSpan), () => {
+            void getData(new XMLHttpRequest(), url, () => {}, testAsync).then(
+              () => {
+                fakeNow = 0;
+                sinon.clock.tick(1000);
+                done();
+              }
+            );
+
+            assert.strictEqual(requests.length, 1, 'request not called');
+            requests[0].error();
+          });
+        }
+
         describe('when request loads and receives an error code', () => {
           beforeEach(done => {
-            webTracerWithZone.withSpan(rootSpan, () => {
-              getData(
-                new XMLHttpRequest(),
-                url,
-                () => {
-                  fakeNow = 100;
-                },
-                testAsync
-              ).then(() => {
-                fakeNow = 0;
-                sandbox.clock.tick(1000);
-                done();
-              });
-              assert.strictEqual(requests.length, 1, 'request not called');
-              requests[0].respond(
-                400,
-                { 'Content-Type': 'text/plain' },
-                'Bad Request'
-              );
-            });
+            erroredRequest(done);
           });
           it('span should have correct attributes', () => {
             const span: tracing.ReadableSpan = exportSpy.args[0][0][0];
@@ -767,38 +874,43 @@ describe('xhr', () => {
             assert.strictEqual(
               attributes[keys[0]],
               'GET',
-              `attributes ${HttpAttribute.HTTP_METHOD} is wrong`
+              `attributes ${SemanticAttributes.HTTP_METHOD} is wrong`
             );
             assert.strictEqual(
               attributes[keys[1]],
               url,
-              `attributes ${HttpAttribute.HTTP_URL} is wrong`
+              `attributes ${SemanticAttributes.HTTP_URL} is wrong`
             );
             assert.strictEqual(
               attributes[keys[2]],
-              400,
-              `attributes ${HttpAttribute.HTTP_STATUS_CODE} is wrong`
+              0,
+              `attributes ${SemanticAttributes.HTTP_REQUEST_CONTENT_LENGTH} is wrong`
             );
             assert.strictEqual(
               attributes[keys[3]],
-              'Bad Request',
-              `attributes ${HttpAttribute.HTTP_STATUS_TEXT} is wrong`
+              400,
+              `attributes ${SemanticAttributes.HTTP_STATUS_CODE} is wrong`
             );
             assert.strictEqual(
               attributes[keys[4]],
+              'Bad Request',
+              `attributes ${AttributeNames.HTTP_STATUS_TEXT} is wrong`
+            );
+            assert.strictEqual(
+              attributes[keys[5]],
               'raw.githubusercontent.com',
-              `attributes ${HttpAttribute.HTTP_HOST} is wrong`
+              `attributes ${SemanticAttributes.HTTP_HOST} is wrong`
             );
             assert.ok(
-              attributes[keys[5]] === 'http' || attributes[keys[5]] === 'https',
-              `attributes ${HttpAttribute.HTTP_SCHEME} is wrong`
+              attributes[keys[6]] === 'http' || attributes[keys[6]] === 'https',
+              `attributes ${SemanticAttributes.HTTP_SCHEME} is wrong`
             );
             assert.ok(
-              attributes[keys[6]] !== '',
-              `attributes ${HttpAttribute.HTTP_USER_AGENT} is not defined`
+              attributes[keys[7]] !== '',
+              `attributes ${SemanticAttributes.HTTP_USER_AGENT} is not defined`
             );
 
-            assert.strictEqual(keys.length, 7, 'number of attributes is wrong');
+            assert.strictEqual(keys.length, 8, 'number of attributes is wrong');
           });
 
           it('span should have correct events', () => {
@@ -872,18 +984,7 @@ describe('xhr', () => {
 
         describe('when request encounters a network error', () => {
           beforeEach(done => {
-            webTracerWithZone.withSpan(rootSpan, () => {
-              getData(new XMLHttpRequest(), url, () => {}, testAsync).then(
-                () => {
-                  fakeNow = 0;
-                  sandbox.clock.tick(1000);
-                  done();
-                }
-              );
-
-              assert.strictEqual(requests.length, 1, 'request not called');
-              requests[0].error();
-            });
+            networkErrorRequest(done);
           });
 
           it('span should have correct attributes', () => {
@@ -894,35 +995,35 @@ describe('xhr', () => {
             assert.strictEqual(
               attributes[keys[0]],
               'GET',
-              `attributes ${HttpAttribute.HTTP_METHOD} is wrong`
+              `attributes ${SemanticAttributes.HTTP_METHOD} is wrong`
             );
             assert.strictEqual(
               attributes[keys[1]],
               url,
-              `attributes ${HttpAttribute.HTTP_URL} is wrong`
+              `attributes ${SemanticAttributes.HTTP_URL} is wrong`
             );
             assert.strictEqual(
               attributes[keys[2]],
               0,
-              `attributes ${HttpAttribute.HTTP_STATUS_CODE} is wrong`
+              `attributes ${SemanticAttributes.HTTP_STATUS_CODE} is wrong`
             );
             assert.strictEqual(
               attributes[keys[3]],
               '',
-              `attributes ${HttpAttribute.HTTP_STATUS_TEXT} is wrong`
+              `attributes ${AttributeNames.HTTP_STATUS_TEXT} is wrong`
             );
             assert.strictEqual(
               attributes[keys[4]],
               'raw.githubusercontent.com',
-              `attributes ${HttpAttribute.HTTP_HOST} is wrong`
+              `attributes ${SemanticAttributes.HTTP_HOST} is wrong`
             );
             assert.ok(
               attributes[keys[5]] === 'http' || attributes[keys[5]] === 'https',
-              `attributes ${HttpAttribute.HTTP_SCHEME} is wrong`
+              `attributes ${SemanticAttributes.HTTP_SCHEME} is wrong`
             );
             assert.ok(
               attributes[keys[6]] !== '',
-              `attributes ${HttpAttribute.HTTP_USER_AGENT} is not defined`
+              `attributes ${SemanticAttributes.HTTP_USER_AGENT} is not defined`
             );
 
             assert.strictEqual(keys.length, 7, 'number of attributes is wrong');
@@ -961,18 +1062,7 @@ describe('xhr', () => {
           });
 
           beforeEach(done => {
-            webTracerWithZone.withSpan(rootSpan, () => {
-              getData(new XMLHttpRequest(), url, () => {}, testAsync).then(
-                () => {
-                  fakeNow = 0;
-                  sandbox.clock.tick(1000);
-                  done();
-                }
-              );
-
-              assert.strictEqual(requests.length, 1, 'request not called');
-              requests[0].abort();
-            });
+            abortedRequest(done);
           });
 
           it('span should have correct attributes', () => {
@@ -983,35 +1073,35 @@ describe('xhr', () => {
             assert.strictEqual(
               attributes[keys[0]],
               'GET',
-              `attributes ${HttpAttribute.HTTP_METHOD} is wrong`
+              `attributes ${SemanticAttributes.HTTP_METHOD} is wrong`
             );
             assert.strictEqual(
               attributes[keys[1]],
               url,
-              `attributes ${HttpAttribute.HTTP_URL} is wrong`
+              `attributes ${SemanticAttributes.HTTP_URL} is wrong`
             );
             assert.strictEqual(
               attributes[keys[2]],
               0,
-              `attributes ${HttpAttribute.HTTP_STATUS_CODE} is wrong`
+              `attributes ${SemanticAttributes.HTTP_STATUS_CODE} is wrong`
             );
             assert.strictEqual(
               attributes[keys[3]],
               '',
-              `attributes ${HttpAttribute.HTTP_STATUS_TEXT} is wrong`
+              `attributes ${AttributeNames.HTTP_STATUS_TEXT} is wrong`
             );
             assert.strictEqual(
               attributes[keys[4]],
               'raw.githubusercontent.com',
-              `attributes ${HttpAttribute.HTTP_HOST} is wrong`
+              `attributes ${SemanticAttributes.HTTP_HOST} is wrong`
             );
             assert.ok(
               attributes[keys[5]] === 'http' || attributes[keys[5]] === 'https',
-              `attributes ${HttpAttribute.HTTP_SCHEME} is wrong`
+              `attributes ${SemanticAttributes.HTTP_SCHEME} is wrong`
             );
             assert.ok(
               attributes[keys[6]] !== '',
-              `attributes ${HttpAttribute.HTTP_USER_AGENT} is not defined`
+              `attributes ${SemanticAttributes.HTTP_USER_AGENT} is not defined`
             );
 
             assert.strictEqual(keys.length, 7, 'number of attributes is wrong');
@@ -1050,20 +1140,7 @@ describe('xhr', () => {
           });
 
           beforeEach(done => {
-            webTracerWithZone.withSpan(rootSpan, () => {
-              getData(
-                new XMLHttpRequest(),
-                url,
-                () => {
-                  sandbox.clock.tick(XHR_TIMEOUT);
-                },
-                testAsync
-              ).then(() => {
-                fakeNow = 0;
-                sandbox.clock.tick(1000);
-                done();
-              });
-            });
+            timedOutRequest(done);
           });
 
           it('span should have correct attributes', () => {
@@ -1074,35 +1151,35 @@ describe('xhr', () => {
             assert.strictEqual(
               attributes[keys[0]],
               'GET',
-              `attributes ${HttpAttribute.HTTP_METHOD} is wrong`
+              `attributes ${SemanticAttributes.HTTP_METHOD} is wrong`
             );
             assert.strictEqual(
               attributes[keys[1]],
               url,
-              `attributes ${HttpAttribute.HTTP_URL} is wrong`
+              `attributes ${SemanticAttributes.HTTP_URL} is wrong`
             );
             assert.strictEqual(
               attributes[keys[2]],
               0,
-              `attributes ${HttpAttribute.HTTP_STATUS_CODE} is wrong`
+              `attributes ${SemanticAttributes.HTTP_STATUS_CODE} is wrong`
             );
             assert.strictEqual(
               attributes[keys[3]],
               '',
-              `attributes ${HttpAttribute.HTTP_STATUS_TEXT} is wrong`
+              `attributes ${AttributeNames.HTTP_STATUS_TEXT} is wrong`
             );
             assert.strictEqual(
               attributes[keys[4]],
               'raw.githubusercontent.com',
-              `attributes ${HttpAttribute.HTTP_HOST} is wrong`
+              `attributes ${SemanticAttributes.HTTP_HOST} is wrong`
             );
             assert.ok(
               attributes[keys[5]] === 'http' || attributes[keys[5]] === 'https',
-              `attributes ${HttpAttribute.HTTP_SCHEME} is wrong`
+              `attributes ${SemanticAttributes.HTTP_SCHEME} is wrong`
             );
             assert.ok(
               attributes[keys[6]] !== '',
-              `attributes ${HttpAttribute.HTTP_USER_AGENT} is not defined`
+              `attributes ${SemanticAttributes.HTTP_USER_AGENT} is not defined`
             );
 
             assert.strictEqual(keys.length, 7, 'number of attributes is wrong');
@@ -1129,6 +1206,94 @@ describe('xhr', () => {
             );
 
             assert.strictEqual(events.length, 3, 'number of events is wrong');
+          });
+        });
+
+        describe('when applyCustomAttributesOnSpan hook is present', () => {
+          describe('AND request loads and receives an error code', () => {
+            beforeEach(done => {
+              clearData();
+              prepareData({
+                applyCustomAttributesOnSpan: function (span, xhr) {
+                  span.setAttribute('xhr-custom-error-code', xhr.status);
+                },
+              });
+              erroredRequest(done);
+            });
+
+            it('span should have custom attribute', () => {
+              const span: tracing.ReadableSpan = exportSpy.args[0][0][0];
+              const attributes = span.attributes;
+              assert.ok(attributes['xhr-custom-error-code'] === 400);
+            });
+          });
+
+          describe('AND request encounters a network error', () => {
+            beforeEach(done => {
+              clearData();
+              prepareData({
+                applyCustomAttributesOnSpan: function (span, xhr) {
+                  span.setAttribute('xhr-custom-error-code', xhr.status);
+                },
+              });
+              networkErrorRequest(done);
+            });
+
+            it('span should have custom attribute', () => {
+              const span: tracing.ReadableSpan = exportSpy.args[0][0][0];
+              const attributes = span.attributes;
+              assert.ok(attributes['xhr-custom-error-code'] === 0);
+            });
+          });
+
+          describe('AND request is aborted', () => {
+            before(function () {
+              // Can only abort Async requests
+              if (!testAsync) {
+                this.skip();
+              }
+            });
+
+            beforeEach(done => {
+              clearData();
+              prepareData({
+                applyCustomAttributesOnSpan: function (span, xhr) {
+                  span.setAttribute('xhr-custom-error-code', xhr.status);
+                },
+              });
+              abortedRequest(done);
+            });
+
+            it('span should have custom attribute', () => {
+              const span: tracing.ReadableSpan = exportSpy.args[0][0][0];
+              const attributes = span.attributes;
+              assert.ok(attributes['xhr-custom-error-code'] === 0);
+            });
+          });
+
+          describe('AND request times out', () => {
+            before(function () {
+              // Can only set timeout for Async requests
+              if (!testAsync) {
+                this.skip();
+              }
+            });
+
+            beforeEach(done => {
+              clearData();
+              prepareData({
+                applyCustomAttributesOnSpan: function (span, xhr) {
+                  span.setAttribute('xhr-custom-error-code', xhr.status);
+                },
+              });
+              timedOutRequest(done);
+            });
+
+            it('span should have custom attribute', () => {
+              const span: tracing.ReadableSpan = exportSpy.args[0][0][0];
+              const attributes = span.attributes;
+              assert.ok(attributes['xhr-custom-error-code'] === 0);
+            });
           });
         });
       });

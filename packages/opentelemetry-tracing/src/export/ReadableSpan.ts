@@ -16,25 +16,25 @@
 
 import {
   SpanKind,
-  Status,
-  Attributes,
+  SpanStatus,
+  SpanAttributes,
   HrTime,
   Link,
   SpanContext,
-  TimedEvent,
 } from '@opentelemetry/api';
 import { Resource } from '@opentelemetry/resources';
 import { InstrumentationLibrary } from '@opentelemetry/core';
+import { TimedEvent } from '../TimedEvent';
 
 export interface ReadableSpan {
   readonly name: string;
   readonly kind: SpanKind;
-  readonly spanContext: SpanContext;
+  readonly spanContext: () => SpanContext;
   readonly parentSpanId?: string;
   readonly startTime: HrTime;
   readonly endTime: HrTime;
-  readonly status: Status;
-  readonly attributes: Attributes;
+  readonly status: SpanStatus;
+  readonly attributes: SpanAttributes;
   readonly links: Link[];
   readonly events: TimedEvent[];
   readonly duration: HrTime;

@@ -14,26 +14,26 @@
  * limitations under the License.
  */
 
-import {
-  MetricRecord,
-  MetricKind,
-  Histogram,
-  AggregatorKind,
-} from '@opentelemetry/metrics';
-import { opentelemetryProto, CollectorExporterConfigBase } from './types';
-import * as api from '@opentelemetry/api';
+import { SpanAttributes, HrTime } from '@opentelemetry/api';
+import { Labels, ValueType } from '@opentelemetry/api-metrics';
 import * as core from '@opentelemetry/core';
+import {
+  AggregatorKind,
+  Histogram,
+  MetricKind,
+  MetricRecord,
+} from '@opentelemetry/metrics';
 import { Resource } from '@opentelemetry/resources';
-import { toCollectorResource } from './transform';
 import { CollectorExporterBase } from './CollectorExporterBase';
-import { HrTime } from '@opentelemetry/api';
+import { toCollectorResource } from './transform';
+import { CollectorExporterConfigBase, opentelemetryProto } from './types';
 
 /**
  * Converts labels
  * @param labels
  */
 export function toCollectorLabels(
-  labels: api.Labels
+  labels: Labels
 ): opentelemetryProto.common.v1.StringKeyValue[] {
   return Object.entries(labels).map(([key, value]) => {
     return { key, value: String(value) };
@@ -47,35 +47,12 @@ export function toCollectorLabels(
 export function toAggregationTemporality(
   metric: MetricRecord
 ): opentelemetryProto.metrics.v1.AggregationTemporality {
-  if (
-    metric.descriptor.metricKind === MetricKind.COUNTER ||
-    metric.descriptor.metricKind === MetricKind.UP_DOWN_COUNTER
-  ) {
-    return opentelemetryProto.metrics.v1.AggregationTemporality
-      .AGGREGATION_TEMPORALITY_DELTA;
-  }
-
-  if (
-    metric.descriptor.metricKind === MetricKind.SUM_OBSERVER ||
-    metric.descriptor.metricKind === MetricKind.UP_DOWN_SUM_OBSERVER
-  ) {
-    return opentelemetryProto.metrics.v1.AggregationTemporality
-      .AGGREGATION_TEMPORALITY_CUMULATIVE;
-  }
-
   if (metric.descriptor.metricKind === MetricKind.VALUE_OBSERVER) {
     return opentelemetryProto.metrics.v1.AggregationTemporality
       .AGGREGATION_TEMPORALITY_UNSPECIFIED;
   }
 
-  // until spec is resolved keep it as unspecified
-  if (metric.descriptor.metricKind === MetricKind.VALUE_RECORDER) {
-    return opentelemetryProto.metrics.v1.AggregationTemporality
-      .AGGREGATION_TEMPORALITY_CUMULATIVE;
-  }
-
-  return opentelemetryProto.metrics.v1.AggregationTemporality
-    .AGGREGATION_TEMPORALITY_UNSPECIFIED;
+  return metric.aggregationTemporality;
 }
 
 /**
@@ -148,7 +125,7 @@ export function toCollectorMetric(
         metric.descriptor.metricKind === MetricKind.SUM_OBSERVER,
       aggregationTemporality: toAggregationTemporality(metric),
     };
-    if (metric.descriptor.valueType === api.ValueType.INT) {
+    if (metric.descriptor.valueType === ValueType.INT) {
       metricCollector.intSum = result;
     } else {
       metricCollector.doubleSum = result;
@@ -157,7 +134,7 @@ export function toCollectorMetric(
     const result = {
       dataPoints: [toDataPoint(metric, startTime)],
     };
-    if (metric.descriptor.valueType === api.ValueType.INT) {
+    if (metric.descriptor.valueType === ValueType.INT) {
       metricCollector.intGauge = result;
     } else {
       metricCollector.doubleGauge = result;
@@ -167,7 +144,7 @@ export function toCollectorMetric(
       dataPoints: [toHistogramPoint(metric, startTime)],
       aggregationTemporality: toAggregationTemporality(metric),
     };
-    if (metric.descriptor.valueType === api.ValueType.INT) {
+    if (metric.descriptor.valueType === ValueType.INT) {
       metricCollector.intHistogram = result;
     } else {
       metricCollector.doubleHistogram = result;
@@ -267,7 +244,7 @@ function toCollectorResourceMetrics(
     Resource,
     Map<core.InstrumentationLibrary, MetricRecord[]>
   >,
-  baseAttributes: api.Attributes,
+  baseAttributes: SpanAttributes,
   startTime: number
 ): opentelemetryProto.metrics.v1.ResourceMetrics[] {
   return Array.from(groupedMetrics, ([resource, libMetrics]) => {

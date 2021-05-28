@@ -20,8 +20,10 @@ import {
   TextMapPropagator,
   TextMapSetter,
 } from '@opentelemetry/api';
+import { isTracingSuppressed } from '@opentelemetry/core';
 import { B3MultiPropagator } from './B3MultiPropagator';
-import { B3SinglePropagator, B3_CONTEXT_HEADER } from './B3SinglePropagator';
+import { B3SinglePropagator } from './B3SinglePropagator';
+import { B3_CONTEXT_HEADER } from './constants';
 import { B3InjectEncoding, B3PropagatorConfig } from './types';
 
 /**
@@ -52,6 +54,9 @@ export class B3Propagator implements TextMapPropagator {
   }
 
   inject(context: Context, carrier: unknown, setter: TextMapSetter) {
+    if (isTracingSuppressed(context)) {
+      return;
+    }
     this._inject(context, carrier, setter);
   }
 

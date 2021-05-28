@@ -16,12 +16,10 @@
 
 import {
   context,
-  NoopTextMapPropagator,
   propagation,
   trace,
   ProxyTracerProvider,
 } from '@opentelemetry/api';
-import { NoopContextManager } from '@opentelemetry/context-base';
 import { CompositePropagator } from '@opentelemetry/core';
 import * as assert from 'assert';
 import { StackContextManager, WebTracerProvider } from '../src';
@@ -41,16 +39,15 @@ describe('API registration', () => {
     assert.ok(
       propagation['_getGlobalPropagator']() instanceof CompositePropagator
     );
-    const apiTracerProvider = trace.getTracerProvider();
-    assert.ok(apiTracerProvider instanceof ProxyTracerProvider);
+    const apiTracerProvider = trace.getTracerProvider() as ProxyTracerProvider;
     assert.ok(apiTracerProvider.getDelegate() === tracerProvider);
   });
 
   it('should register configured implementations', () => {
     const tracerProvider = new WebTracerProvider();
 
-    const contextManager = new NoopContextManager();
-    const propagator = new NoopTextMapPropagator();
+    const contextManager = { disable() { }, enable() { } } as any;
+    const propagator = {} as any;
 
     tracerProvider.register({
       contextManager,
@@ -60,40 +57,37 @@ describe('API registration', () => {
     assert.ok(context['_getContextManager']() === contextManager);
     assert.ok(propagation['_getGlobalPropagator']() === propagator);
 
-    const apiTracerProvider = trace.getTracerProvider();
-    assert.ok(apiTracerProvider instanceof ProxyTracerProvider);
+    const apiTracerProvider = trace.getTracerProvider() as ProxyTracerProvider;
     assert.ok(apiTracerProvider.getDelegate() === tracerProvider);
   });
 
   it('should skip null context manager', () => {
+    const ctxManager = context['_getContextManager']();
     const tracerProvider = new WebTracerProvider();
     tracerProvider.register({
       contextManager: null,
     });
 
-    assert.ok(context['_getContextManager']() instanceof NoopContextManager);
+    assert.strictEqual(context['_getContextManager'](), ctxManager, "context manager should not change");
 
     assert.ok(
       propagation['_getGlobalPropagator']() instanceof CompositePropagator
     );
-    const apiTracerProvider = trace.getTracerProvider();
-    assert.ok(apiTracerProvider instanceof ProxyTracerProvider);
+    const apiTracerProvider = trace.getTracerProvider() as ProxyTracerProvider;
     assert.ok(apiTracerProvider.getDelegate() === tracerProvider);
   });
 
   it('should skip null propagator', () => {
+    const propagator = propagation['_getGlobalPropagator']();
     const tracerProvider = new WebTracerProvider();
     tracerProvider.register({
       propagator: null,
     });
 
-    assert.ok(
-      propagation['_getGlobalPropagator']() instanceof NoopTextMapPropagator
-    );
+    assert.strictEqual(propagation["_getGlobalPropagator"](), propagator, "propagator should not change")
 
     assert.ok(context['_getContextManager']() instanceof StackContextManager);
-    const apiTracerProvider = trace.getTracerProvider();
-    assert.ok(apiTracerProvider instanceof ProxyTracerProvider);
+    const apiTracerProvider = trace.getTracerProvider() as ProxyTracerProvider;
     assert.ok(apiTracerProvider.getDelegate() === tracerProvider);
   });
 });

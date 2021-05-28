@@ -44,7 +44,7 @@ export type ParsedRequestOptions =
   | http.RequestOptions;
 export type Http = typeof http;
 export type Https = typeof https;
-/* tslint:disable-next-line:no-any */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type Func<T> = (...args: any[]) => T;
 export type ResponseEndArgs =
   | [((() => void) | undefined)?]
@@ -68,7 +68,7 @@ export interface HttpResponseCustomAttributeFunction {
 }
 
 /**
- * Options available for the HTTP instrumentation (see [documentation](https://github.com/open-telemetry/opentelemetry-js/tree/master/packages/opentelemetry-instrumentation-http#http-instrumentation-options))
+ * Options available for the HTTP instrumentation (see [documentation](https://github.com/open-telemetry/opentelemetry-js/tree/main/packages/opentelemetry-instrumentation-http#http-instrumentation-options))
  */
 export interface HttpInstrumentationConfig extends InstrumentationConfig {
   /** Not trace all incoming requests that match paths */

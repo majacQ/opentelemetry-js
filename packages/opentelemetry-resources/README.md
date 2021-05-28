@@ -1,6 +1,5 @@
 # OpenTelemetry Resources Util
 
-[![Gitter chat][gitter-image]][gitter-url]
 [![NPM Published Version][npm-img]][npm-url]
 [![dependencies][dependencies-image]][dependencies-url]
 [![devDependencies][devDependencies-image]][devDependencies-url]
@@ -18,25 +17,35 @@ npm install --save @opentelemetry/resources
 
 ## Usage
 
-> TODO
+```typescript
+import { Resource, SERVICE_RESOURCE } from '@opentelemetry/resources';
+const resource = new Resource({
+    [SERVICE_RESOURCE.NAME]: 'api-service',
+});
+
+const another_resource = new Resource({
+    'service.version': 2.0.0,
+    'service.group': 'instrumentation-group'
+});
+const merged_resource = resource.merge(another_resource);
+```
 
 ## Useful links
 
 - For more information on OpenTelemetry, visit: <https://opentelemetry.io/>
 - For more about OpenTelemetry JavaScript: <https://github.com/open-telemetry/opentelemetry-js>
-- For help or feedback on this project, join us on [gitter][gitter-url]
+- For help or feedback on this project, join us in [GitHub Discussions][discussions-url]
 
 ## License
 
 Apache 2.0 - See [LICENSE][license-url] for more information.
 
-[gitter-image]: https://badges.gitter.im/open-telemetry/opentelemetry-js.svg
-[gitter-url]: https://gitter.im/open-telemetry/opentelemetry-node?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge
-[license-url]: https://github.com/open-telemetry/opentelemetry-js/blob/master/LICENSE
+[discussions-url]: https://github.com/open-telemetry/opentelemetry-js/discussions
+[license-url]: https://github.com/open-telemetry/opentelemetry-js/blob/main/LICENSE
 [license-image]: https://img.shields.io/badge/license-Apache_2.0-green.svg?style=flat
-[dependencies-image]: https://david-dm.org/open-telemetry/opentelemetry-js/status.svg?path=packages/opentelemetry-resources
+[dependencies-image]: https://status.david-dm.org/gh/open-telemetry/opentelemetry-js.svg?path=packages%2Fopentelemetry-resources
 [dependencies-url]: https://david-dm.org/open-telemetry/opentelemetry-js?path=packages%2Fopentelemetry-resources
-[devDependencies-image]: https://david-dm.org/open-telemetry/opentelemetry-js/dev-status.svg?path=packages/opentelemetry-resources
+[devDependencies-image]: https://status.david-dm.org/gh/open-telemetry/opentelemetry-js.svg?path=packages%2Fopentelemetry-resources&type=dev
 [devDependencies-url]: https://david-dm.org/open-telemetry/opentelemetry-js?path=packages%2Fopentelemetry-resources&type=dev
 [npm-url]: https://www.npmjs.com/package/@opentelemetry/resources
 [npm-img]: https://badge.fury.io/js/%40opentelemetry%2Fresources.svg

@@ -16,17 +16,16 @@
 
 import * as api from '@opentelemetry/api';
 import {
-  ConsoleLogger,
-  InstrumentationLibrary,
-  NoRecordingSpan,
   IdGenerator,
+  InstrumentationLibrary,
   RandomIdGenerator,
   sanitizeAttributes,
+  isTracingSuppressed,
 } from '@opentelemetry/core';
 import { Resource } from '@opentelemetry/resources';
 import { BasicTracerProvider } from './BasicTracerProvider';
 import { Span } from './Span';
-import { TraceParams, TracerConfig } from './types';
+import { SpanLimits, TracerConfig } from './types';
 import { mergeConfig } from './utility';
 
 /**
@@ -34,11 +33,10 @@ import { mergeConfig } from './utility';
  */
 export class Tracer implements api.Tracer {
   private readonly _sampler: api.Sampler;
-  private readonly _traceParams: TraceParams;
+  private readonly _spanLimits: SpanLimits;
   private readonly _idGenerator: IdGenerator;
   readonly resource: Resource;
   readonly instrumentationLibrary: InstrumentationLibrary;
-  readonly logger: api.Logger;
 
   /**
    * Constructs a new Tracer instance.
@@ -50,11 +48,50 @@ export class Tracer implements api.Tracer {
   ) {
     const localConfig = mergeConfig(config);
     this._sampler = localConfig.sampler;
-    this._traceParams = localConfig.traceParams;
+    this._spanLimits = localConfig.spanLimits;
     this._idGenerator = config.idGenerator || new RandomIdGenerator();
     this.resource = _tracerProvider.resource;
     this.instrumentationLibrary = instrumentationLibrary;
-    this.logger = config.logger || new ConsoleLogger(config.logLevel);
+  }
+
+  startActiveSpan<F extends (span: api.Span) => ReturnType<F>>(
+    name: string,
+    arg2: F | api.SpanOptions,
+    arg3?: F | api.Context,
+    arg4?: F
+  ): ReturnType<F> | undefined {
+    let fn: F | undefined,
+      options: api.SpanOptions | undefined,
+      activeContext: api.Context | undefined;
+
+    if (arguments.length === 2 && typeof arg2 === 'function') {
+      fn = arg2;
+    } else if (
+      arguments.length === 3 &&
+      typeof arg2 === 'object' &&
+      typeof arg3 === 'function'
+    ) {
+      options = arg2;
+      fn = arg3;
+    } else if (
+      arguments.length === 4 &&
+      typeof arg2 === 'object' &&
+      typeof arg3 === 'object' &&
+      typeof arg4 === 'function'
+    ) {
+      options = arg2;
+      activeContext = arg3;
+      fn = arg4;
+    }
+
+    const parentContext = activeContext ?? api.context.active();
+    const span = this.startSpan(name, options, parentContext);
+    const contextWithSpanSet = api.trace.setSpan(parentContext, span);
+
+    if (fn) {
+      return api.context.with(contextWithSpanSet, fn, undefined, span);
+    }
+    return;
   }
 
   /**
@@ -66,15 +103,16 @@ export class Tracer implements api.Tracer {
     options: api.SpanOptions = {},
     context = api.context.active()
   ): api.Span {
-    if (api.isInstrumentationSuppressed(context)) {
-      this.logger.debug('Instrumentation suppressed, returning Noop Span');
-      return api.NOOP_SPAN;
+    if (isTracingSuppressed(context)) {
+      api.diag.debug('Instrumentation suppressed, returning Noop Span');
+      return api.trace.wrapSpanContext(api.INVALID_SPAN_CONTEXT);
     }
 
     const parentContext = getParent(options, context);
     const spanId = this._idGenerator.generateSpanId();
     let traceId;
     let traceState;
+    let parentSpanId;
     if (!parentContext || !api.trace.isSpanContextValid(parentContext)) {
       // New root span.
       traceId = this._idGenerator.generateTraceId();
@@ -82,6 +120,7 @@ export class Tracer implements api.Tracer {
       // New child span.
       traceId = parentContext.traceId;
       traceState = parentContext.traceState;
+      parentSpanId = parentContext.spanId;
     }
 
     const spanKind = options.kind ?? api.SpanKind.INTERNAL;
@@ -89,7 +128,9 @@ export class Tracer implements api.Tracer {
     const attributes = sanitizeAttributes(options.attributes);
     // make sampling decision
     const samplingResult = this._sampler.shouldSample(
-      context,
+      options.root
+        ? api.trace.setSpanContext(context, api.INVALID_SPAN_CONTEXT)
+        : context,
       traceId,
       name,
       spanKind,
@@ -103,8 +144,8 @@ export class Tracer implements api.Tracer {
         : api.TraceFlags.NONE;
     const spanContext = { traceId, spanId, traceFlags, traceState };
     if (samplingResult.decision === api.SamplingDecision.NOT_RECORD) {
-      this.logger.debug('Recording is off, starting no recording span');
-      return new NoRecordingSpan(spanContext);
+      api.diag.debug('Recording is off, propagating context in a non-recording span');
+      return api.trace.wrapSpanContext(spanContext);
     }
 
     const span = new Span(
@@ -113,7 +154,7 @@ export class Tracer implements api.Tracer {
       name,
       spanContext,
       spanKind,
-      parentContext ? parentContext.spanId : undefined,
+      parentSpanId,
       links,
       options.startTime
     );
@@ -122,43 +163,9 @@ export class Tracer implements api.Tracer {
     return span;
   }
 
-  /**
-   * Returns the current Span from the current context.
-   *
-   * If there is no Span associated with the current context, undefined is returned.
-   */
-  getCurrentSpan(): api.Span | undefined {
-    const ctx = api.context.active();
-    // Get the current Span from the context or null if none found.
-    return api.getActiveSpan(ctx);
-  }
-
-  /**
-   * Enters the context of code where the given Span is in the current context.
-   */
-  withSpan<T extends (...args: unknown[]) => ReturnType<T>>(
-    span: api.Span,
-    fn: T
-  ): ReturnType<T> {
-    // Set given span to context.
-    return api.context.with(api.setActiveSpan(api.context.active(), span), fn);
-  }
-
-  /**
-   * Bind a span (or the current one) to the target's context
-   */
-  bind<T>(target: T, span?: api.Span): T {
-    return api.context.bind(
-      target,
-      span
-        ? api.setActiveSpan(api.context.active(), span)
-        : api.context.active()
-    );
-  }
-
-  /** Returns the active {@link TraceParams}. */
-  getActiveTraceParams(): TraceParams {
-    return this._traceParams;
+  /** Returns the active {@link SpanLimits}. */
+  getSpanLimits(): SpanLimits {
+    return this._spanLimits;
   }
 
   getActiveSpanProcessor() {
@@ -178,5 +185,5 @@ function getParent(
   context: api.Context
 ): api.SpanContext | undefined {
   if (options.root) return undefined;
-  return api.getParentSpanContext(context);
+  return api.trace.getSpanContext(context);
 }

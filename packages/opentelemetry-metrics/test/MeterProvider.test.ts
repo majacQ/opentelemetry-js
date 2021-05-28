@@ -17,9 +17,12 @@
 import * as assert from 'assert';
 import * as sinon from 'sinon';
 import { MeterProvider, Meter, CounterMetric } from '../src';
-import { NoopLogger } from '@opentelemetry/core';
 
 describe('MeterProvider', () => {
+  afterEach(() => {
+    sinon.restore();
+  });
+
   describe('constructor', () => {
     it('should construct an instance without any options', () => {
       const provider = new MeterProvider();
@@ -27,9 +30,7 @@ describe('MeterProvider', () => {
     });
 
     it('should construct an instance with logger', () => {
-      const provider = new MeterProvider({
-        logger: new NoopLogger(),
-      });
+      const provider = new MeterProvider();
       assert.ok(provider instanceof MeterProvider);
     });
   });
@@ -51,7 +52,7 @@ describe('MeterProvider', () => {
     it('should return the meter with default version without a version option', () => {
       const provider = new MeterProvider();
       const meter1 = provider.getMeter('default');
-      const meter2 = provider.getMeter('default', '*');
+      const meter2 = provider.getMeter('default', undefined);
       assert.deepEqual(meter1, meter2);
     });
 
@@ -80,12 +81,11 @@ describe('MeterProvider', () => {
       const meterProvider = new MeterProvider({
         interval: Math.pow(2, 31) - 1,
       });
-      const sandbox = sinon.createSandbox();
-      const shutdownStub1 = sandbox.stub(
+      const shutdownStub1 = sinon.stub(
         meterProvider.getMeter('meter1'),
         'shutdown'
       );
-      const shutdownStub2 = sandbox.stub(
+      const shutdownStub2 = sinon.stub(
         meterProvider.getMeter('meter2'),
         'shutdown'
       );

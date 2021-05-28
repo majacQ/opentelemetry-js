@@ -1,6 +1,5 @@
 # OpenTelemetry XMLHttpRequest Instrumentation for web
 
-[![Gitter chat][gitter-image]][gitter-url]
 [![NPM Published Version][npm-img]][npm-url]
 [![dependencies][dependencies-image]][dependencies-url]
 [![devDependencies][devDependencies-image]][devDependencies-url]
@@ -21,19 +20,26 @@ import { ConsoleSpanExporter, SimpleSpanProcessor } from '@opentelemetry/tracing
 import { WebTracerProvider } from '@opentelemetry/web';
 import { XMLHttpRequestInstrumentation } from '@opentelemetry/instrumentation-xml-http-request';
 import { ZoneContextManager } from '@opentelemetry/context-zone';
+import { registerInstrumentations } from '@opentelemetry/instrumentation';
 
-// this is still possible
-const providerWithZone = new WebTracerProvider({
-  plugins: [
-    new XMLHttpRequestInstrumentation({
-      propagateTraceHeaderCorsUrls: ['http://localhost:8090']
-    })
-  ]
-});
+const providerWithZone = new WebTracerProvider();
+providerWithZone.addSpanProcessor(new SimpleSpanProcessor(new ConsoleSpanExporter()));
+
 providerWithZone.register({
   contextManager: new ZoneContextManager(),
 });
+
+registerInstrumentations({
+  instrumentations: [
+    new XMLHttpRequestInstrumentation({
+      propagateTraceHeaderCorsUrls: ['http://localhost:8090']
+    }),
+  ],
+});
+
+
 const webTracerWithZone = providerWithZone.getTracer('default');
+
 /////////////////////////////////////////
 
 // or plugin can be also initialised separately and then set the tracer provider or meter provider
@@ -47,7 +53,6 @@ providerWithZone.register({
 xmlHttpRequestInstrumentation.setTracerProvider(providerWithZone);
 /////////////////////////////////////////
 
-providerWithZone.addSpanProcessor(new SimpleSpanProcessor(new ConsoleSpanExporter()));
 
 // and some test
 const req = new XMLHttpRequest();
@@ -62,25 +67,24 @@ req.send();
 ![Screenshot of the running example](images/request.jpg)
 ![Screenshot of the running example](images/cors.jpg)
 
-See [examples/tracer-web](https://github.com/open-telemetry/opentelemetry-js/tree/master/examples/tracer-web) for a short example.
+See [examples/tracer-web](https://github.com/open-telemetry/opentelemetry-js/tree/main/examples/tracer-web) for a short example.
 
 ## Useful links
 
 - For more information on OpenTelemetry, visit: <https://opentelemetry.io/>
 - For more about OpenTelemetry JavaScript: <https://github.com/open-telemetry/opentelemetry-js>
-- For help or feedback on this project, join us on [gitter][gitter-url]
+- For help or feedback on this project, join us in [GitHub Discussions][discussions-url]
 
 ## License
 
 Apache 2.0 - See [LICENSE][license-url] for more information.
 
-[gitter-image]: https://badges.gitter.im/open-telemetry/opentelemetry-js.svg
-[gitter-url]: https://gitter.im/open-telemetry/opentelemetry-node?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge&utm_content=badge
-[license-url]: https://github.com/open-telemetry/opentelemetry-js/blob/master/LICENSE
+[discussions-url]: https://github.com/open-telemetry/opentelemetry-js/discussions
+[license-url]: https://github.com/open-telemetry/opentelemetry-js/blob/main/LICENSE
 [license-image]: https://img.shields.io/badge/license-Apache_2.0-green.svg?style=flat
-[dependencies-image]: https://david-dm.org/open-telemetry/opentelemetry-js/status.svg?path=packages/opentelemetry-instrumentation-xml-http-request
+[dependencies-image]: https://status.david-dm.org/gh/open-telemetry/opentelemetry-js.svg?path=packages%2Fopentelemetry-instrumentation-xml-http-request
 [dependencies-url]: https://david-dm.org/open-telemetry/opentelemetry-js?path=packages%2Fopentelemetry-instrumentation-xml-http-request
-[devDependencies-image]: https://david-dm.org/open-telemetry/opentelemetry-js/dev-status.svg?path=packages/opentelemetry-instrumentation-xml-http-request
+[devDependencies-image]: https://status.david-dm.org/gh/open-telemetry/opentelemetry-js.svg?path=packages%2Fopentelemetry-instrumentation-xml-http-request&type=dev
 [devDependencies-url]: https://david-dm.org/open-telemetry/opentelemetry-js?path=packages%2Fopentelemetry-instrumentation-xml-http-request&type=dev
 [npm-url]: https://www.npmjs.com/package/@opentelemetry/instrumentation-xml-http-request
 [npm-img]: https://badge.fury.io/js/%40opentelemetry%2Finstrumentation-xml-http-request.svg

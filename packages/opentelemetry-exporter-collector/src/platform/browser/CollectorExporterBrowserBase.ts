@@ -19,6 +19,8 @@ import { CollectorExporterConfigBase } from '../../types';
 import * as collectorTypes from '../../types';
 import { parseHeaders } from '../../util';
 import { sendWithBeacon, sendWithXhr } from './util';
+import { diag } from '@opentelemetry/api';
+import { getEnv, baggageUtils } from '@opentelemetry/core';
 
 /**
  * Collector Metric Exporter abstract base class
@@ -31,7 +33,7 @@ export abstract class CollectorExporterBrowserBase<
   ExportItem,
   ServiceRequest
 > {
-  private _headers: Record<string, string>;
+  protected _headers: Record<string, string>;
   private _useXHR: boolean = false;
 
   /**
@@ -42,7 +44,13 @@ export abstract class CollectorExporterBrowserBase<
     this._useXHR =
       !!config.headers || typeof navigator.sendBeacon !== 'function';
     if (this._useXHR) {
-      this._headers = parseHeaders(config.headers, this.logger);
+      this._headers = Object.assign(
+        {},
+        parseHeaders(config.headers),
+        baggageUtils.parseKeyPairsIntoRecord(
+          getEnv().OTEL_EXPORTER_OTLP_HEADERS
+        )
+      );
     } else {
       this._headers = {};
     }
@@ -62,13 +70,13 @@ export abstract class CollectorExporterBrowserBase<
     onError: (error: collectorTypes.CollectorExporterError) => void
   ) {
     if (this._isShutdown) {
-      this.logger.debug('Shutdown already started. Cannot send objects');
+      diag.debug('Shutdown already started. Cannot send objects');
       return;
     }
     const serviceRequest = this.convert(items);
     const body = JSON.stringify(serviceRequest);
 
-    const promise = new Promise(resolve => {
+    const promise = new Promise<void>(resolve => {
       const _onSuccess = (): void => {
         onSuccess();
         _onFinish();
@@ -84,16 +92,9 @@ export abstract class CollectorExporterBrowserBase<
       };
 
       if (this._useXHR) {
-        sendWithXhr(
-          body,
-          this.url,
-          this._headers,
-          this.logger,
-          _onSuccess,
-          _onError
-        );
+        sendWithXhr(body, this.url, this._headers, _onSuccess, _onError);
       } else {
-        sendWithBeacon(body, this.url, this.logger, _onSuccess, _onError);
+        sendWithBeacon(body, this.url, _onSuccess, _onError);
       }
     });
     this._sendingPromises.push(promise);

@@ -1,12 +1,23 @@
+import { context, trace } from '@opentelemetry/api';
 import { ConsoleSpanExporter, SimpleSpanProcessor } from '@opentelemetry/tracing';
 import { WebTracerProvider } from '@opentelemetry/web';
 import { XMLHttpRequestInstrumentation } from '@opentelemetry/instrumentation-xml-http-request';
 import { ZoneContextManager } from '@opentelemetry/context-zone';
 import { CollectorTraceExporter } from '@opentelemetry/exporter-collector';
 import { B3Propagator } from '@opentelemetry/propagator-b3';
+import { registerInstrumentations } from '@opentelemetry/instrumentation';
 
-const providerWithZone = new WebTracerProvider({
-  plugins: [
+const providerWithZone = new WebTracerProvider();
+providerWithZone.addSpanProcessor(new SimpleSpanProcessor(new ConsoleSpanExporter()));
+providerWithZone.addSpanProcessor(new SimpleSpanProcessor(new CollectorTraceExporter()));
+
+providerWithZone.register({
+  contextManager: new ZoneContextManager(),
+  propagator: new B3Propagator(),
+});
+
+registerInstrumentations({
+  instrumentations: [
     new XMLHttpRequestInstrumentation({
       ignoreUrls: [/localhost:8090\/sockjs-node/],
       propagateTraceHeaderCorsUrls: [
@@ -14,14 +25,6 @@ const providerWithZone = new WebTracerProvider({
       ],
     }),
   ],
-});
-
-providerWithZone.addSpanProcessor(new SimpleSpanProcessor(new ConsoleSpanExporter()));
-providerWithZone.addSpanProcessor(new SimpleSpanProcessor(new CollectorTraceExporter()));
-
-providerWithZone.register({
-  contextManager: new ZoneContextManager(),
-  propagator: new B3Propagator(),
 });
 
 const webTracerWithZone = providerWithZone.getTracer('example-tracer-web');
@@ -49,15 +52,13 @@ const prepareClickEvent = () => {
 
   const onClick = () => {
     for (let i = 0, j = 5; i < j; i += 1) {
-      const span1 = webTracerWithZone.startSpan(`files-series-info-${i}`, {
-        parent: webTracerWithZone.getCurrentSpan(),
-      });
-      webTracerWithZone.withSpan(span1, () => {
+      const span1 = webTracerWithZone.startSpan(`files-series-info-${i}`);
+      context.with(trace.setSpan(context.active(), span1), () => {
         getData(url1).then((_data) => {
-          webTracerWithZone.getCurrentSpan().addEvent('fetching-span1-completed');
+          trace.getSpan(context.active()).addEvent('fetching-span1-completed');
           span1.end();
         }, ()=> {
-          webTracerWithZone.getCurrentSpan().addEvent('fetching-error');
+          trace.getSpan(context.active()).addEvent('fetching-error');
           span1.end();
         });
       });

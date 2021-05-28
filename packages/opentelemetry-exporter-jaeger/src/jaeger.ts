@@ -14,12 +14,8 @@
  * limitations under the License.
  */
 
-import * as api from '@opentelemetry/api';
-import {
-  ExportResult,
-  ExportResultCode,
-  NoopLogger,
-} from '@opentelemetry/core';
+import { diag } from '@opentelemetry/api';
+import { ExportResult, ExportResultCode, getEnv } from '@opentelemetry/core';
 import { ReadableSpan, SpanExporter } from '@opentelemetry/tracing';
 import { Socket } from 'dgram';
 import { spanToThrift } from './transform';
@@ -29,7 +25,6 @@ import * as jaegerTypes from './types';
  * Format and sends span information to Jaeger Exporter.
  */
 export class JaegerExporter implements SpanExporter {
-  private readonly _logger: api.Logger;
   private readonly _process: jaegerTypes.ThriftProcess;
   private readonly _sender: typeof jaegerTypes.UDPSender;
   private readonly _onShutdownFlushTimeout: number;
@@ -39,7 +34,6 @@ export class JaegerExporter implements SpanExporter {
 
   constructor(config: jaegerTypes.ExporterConfig) {
     const localConfig = Object.assign({}, config);
-    this._logger = localConfig.logger || new NoopLogger();
     const tags: jaegerTypes.Tag[] = localConfig.tags || [];
     this._onShutdownFlushTimeout =
       typeof localConfig.flushTimeout === 'number'
@@ -47,14 +41,19 @@ export class JaegerExporter implements SpanExporter {
         : 2000;
 
     // https://github.com/jaegertracing/jaeger-client-node#environment-variables
-    // By default, the client sends traces via UDP to the agent at localhost:6832. Use JAEGER_AGENT_HOST and
-    // JAEGER_AGENT_PORT to send UDP traces to a different host:port. If JAEGER_ENDPOINT is set, the client sends traces
-    // to the endpoint via HTTP, making the JAEGER_AGENT_HOST and JAEGER_AGENT_PORT unused. If JAEGER_ENDPOINT is secured,
-    // HTTP basic authentication can be performed by setting the JAEGER_USER and JAEGER_PASSWORD environment variables.
-    localConfig.endpoint = localConfig.endpoint || process.env.JAEGER_ENDPOINT;
-    localConfig.username = localConfig.username || process.env.JAEGER_USER;
-    localConfig.password = localConfig.password || process.env.JAEGER_PASSWORD;
-    localConfig.host = localConfig.host || process.env.JAEGER_AGENT_HOST;
+    // By default, the client sends traces via UDP to the agent at localhost:6832. Use OTEL_EXPORTER_JAEGER_AGENT_HOST and
+    // JAEGER_AGENT_PORT to send UDP traces to a different host:port. If OTEL_EXPORTER_JAEGER_ENDPOINT is set, the client sends traces
+    // to the endpoint via HTTP, making the OTEL_EXPORTER_JAEGER_AGENT_HOST and JAEGER_AGENT_PORT unused. If OTEL_EXPORTER_JAEGER_ENDPOINT is secured,
+    // HTTP basic authentication can be performed by setting the OTEL_EXPORTER_JAEGER_USER and OTEL_EXPORTER_JAEGER_PASSWORD environment variables.
+
+    const env = getEnv();
+    localConfig.endpoint =
+      localConfig.endpoint || env.OTEL_EXPORTER_JAEGER_ENDPOINT;
+    localConfig.username =
+      localConfig.username || env.OTEL_EXPORTER_JAEGER_USER;
+    localConfig.password =
+      localConfig.password || env.OTEL_EXPORTER_JAEGER_PASSWORD;
+    localConfig.host = localConfig.host || env.OTEL_EXPORTER_JAEGER_AGENT_HOST;
     if (localConfig.endpoint) {
       this._sender = new jaegerTypes.HTTPSender(localConfig);
     } else {
@@ -83,7 +82,7 @@ export class JaegerExporter implements SpanExporter {
     if (spans.length === 0) {
       return resultCallback({ code: ExportResultCode.SUCCESS });
     }
-    this._logger.debug('Jaeger exporter export');
+    diag.debug('Jaeger exporter export');
     this._sendSpans(spans, resultCallback).catch(error => {
       return resultCallback({ code: ExportResultCode.FAILED, error });
     });
@@ -140,7 +139,7 @@ export class JaegerExporter implements SpanExporter {
         if (done) return done({ code: ExportResultCode.FAILED, error });
       }
     }
-    this._logger.debug('successful append for : %s', thriftSpan.length);
+    diag.debug('successful append for : %s', thriftSpan.length);
 
     // Flush all spans on each export. No-op if span buffer is empty
     await this._flush();
@@ -160,12 +159,12 @@ export class JaegerExporter implements SpanExporter {
   }
 
   private async _flush(): Promise<void> {
-    await new Promise((resolve, reject) => {
+    await new Promise<void>((resolve, reject) => {
       this._sender.flush((_count: number, err?: string) => {
         if (err) {
           return reject(new Error(err));
         }
-        this._logger.debug('successful flush for %s spans', _count);
+        diag.debug('successful flush for %s spans', _count);
         resolve();
       });
     });

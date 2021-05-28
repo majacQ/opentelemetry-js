@@ -13,22 +13,21 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import * as api from '@opentelemetry/api';
-import { NoopLogger } from '@opentelemetry/core';
+import * as api from '@opentelemetry/api-metrics';
+import { InstrumentationLibrary } from '@opentelemetry/core';
 import { Resource } from '@opentelemetry/resources';
 import { BaseBoundInstrument } from './BoundInstrument';
 import { MetricDescriptor, MetricKind, MetricRecord } from './export/types';
 import { hashLabels } from './Utils';
-import { InstrumentationLibrary } from '@opentelemetry/core';
 
 /** This is a SDK implementation of {@link Metric} interface. */
 export abstract class Metric<T extends BaseBoundInstrument>
   implements api.UnboundMetric<T> {
   protected readonly _disabled: boolean;
   protected readonly _valueType: api.ValueType;
-  protected readonly _logger: api.Logger;
   protected readonly _descriptor: MetricDescriptor;
   protected readonly _boundaries: number[] | undefined;
+  protected readonly _aggregationTemporality: api.AggregationTemporality;
   private readonly _instruments: Map<string, T> = new Map();
 
   constructor(
@@ -43,9 +42,12 @@ export abstract class Metric<T extends BaseBoundInstrument>
       typeof _options.valueType === 'number'
         ? _options.valueType
         : api.ValueType.DOUBLE;
-    this._logger = _options.logger ?? new NoopLogger();
     this._boundaries = _options.boundaries;
     this._descriptor = this._getMetricDescriptor();
+    this._aggregationTemporality =
+      _options.aggregationTemporality === undefined
+        ? api.AggregationTemporality.AGGREGATION_TEMPORALITY_CUMULATIVE
+        : _options.aggregationTemporality;
   }
 
   /**
@@ -86,6 +88,10 @@ export abstract class Metric<T extends BaseBoundInstrument>
     return this._kind;
   }
 
+  getAggregationTemporality() {
+    return this._aggregationTemporality;
+  }
+
   getMetricRecord(): Promise<MetricRecord[]> {
     return new Promise(resolve => {
       resolve(
@@ -93,6 +99,7 @@ export abstract class Metric<T extends BaseBoundInstrument>
           descriptor: this._descriptor,
           labels: instrument.getLabels(),
           aggregator: instrument.getAggregator(),
+          aggregationTemporality: this.getAggregationTemporality(),
           resource: this.resource,
           instrumentationLibrary: this.instrumentationLibrary,
         }))

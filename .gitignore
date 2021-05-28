@@ -61,8 +61,6 @@ typings/
 # lock files
 yarn.lock
 package-lock.json
-packages/**/yarn.lock
-packages/**/package-lock.json
 
 # docs files
 docs
@@ -78,6 +76,9 @@ package.json.lerna_backup
 
 # VsCode configs
 .vscode/
+
+#Visual Studio
+.vs/
 
 #IDEA
 .idea

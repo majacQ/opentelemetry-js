@@ -2,10 +2,10 @@
 
 const benchmark = require('./benchmark');
 const opentelemetry = require('../packages/opentelemetry-api');
-const { NoopLogger } = require('../packages/opentelemetry-core');
 const { BasicTracerProvider, BatchSpanProcessor, InMemorySpanExporter, SimpleSpanProcessor } = require('../packages/opentelemetry-tracing');
 
-const logger = new NoopLogger();
+// Clear any previous global logger
+opentelemetry.diag.setLogger();
 
 const setups = [
   {
@@ -14,7 +14,7 @@ const setups = [
   },
   {
     name: 'BasicTracerProvider',
-    provider: new BasicTracerProvider({ logger })
+    provider: new BasicTracerProvider()
   },
   {
     name: 'BasicTracerProvider with SimpleSpanProcessor',
@@ -64,7 +64,7 @@ for (const setup of setups) {
   suite.run({ async: false });
 }
 function getProvider(processor) {
-  const provider = new BasicTracerProvider({ logger });
+  const provider = new BasicTracerProvider();
   provider.addSpanProcessor(processor);
   return provider;
 }

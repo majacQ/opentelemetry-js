@@ -14,36 +14,36 @@
  * limitations under the License.
  */
 
+import { diag } from '@opentelemetry/api';
+import * as api from '@opentelemetry/api-metrics';
+import { hrTime, hrTimeToNanoseconds } from '@opentelemetry/core';
+import { Resource } from '@opentelemetry/resources';
 import * as assert from 'assert';
 import * as sinon from 'sinon';
 import {
-  Meter,
-  Metric,
-  CounterMetric,
-  MetricKind,
-  Sum,
-  MeterProvider,
-  ValueRecorderMetric,
-  ValueObserverMetric,
-  MetricRecord,
   Aggregator,
-  MetricDescriptor,
-  UpDownCounterMetric,
-  LastValueAggregator,
-  LastValue,
+  CounterMetric,
   Histogram,
+  LastValue,
+  LastValueAggregator,
+  Meter,
+  MeterProvider,
+  Metric,
+  MetricDescriptor,
+  MetricKind,
+  MetricRecord,
+  Sum,
+  UpDownCounterMetric,
+  ValueObserverMetric,
+  ValueRecorderMetric,
 } from '../src';
-import * as api from '@opentelemetry/api';
-import { NoopLogger, hrTime, hrTimeToNanoseconds } from '@opentelemetry/core';
+import { BatchObserver } from '../src/BatchObserver';
 import { BatchObserverResult } from '../src/BatchObserverResult';
 import { SumAggregator } from '../src/export/aggregators';
+import { Processor } from '../src/export/Processor';
 import { SumObserverMetric } from '../src/SumObserverMetric';
-import { Resource } from '@opentelemetry/resources';
 import { UpDownSumObserverMetric } from '../src/UpDownSumObserverMetric';
 import { hashLabels } from '../src/Utils';
-import { Processor } from '../src/export/Processor';
-import { ValueType } from '@opentelemetry/api';
-import { BatchObserver } from '../src/BatchObserver';
 
 const nonNumberValues = [
   // type undefined
@@ -68,7 +68,6 @@ if (Number(process.versions.node.match(/^\d+/)) >= 10) {
     // type bigint
     // Preferring BigInt builtin object instead of bigint literal to keep Node.js v8.x working.
     // TODO: should metric instruments support bigint?
-    // @ts-ignore
     BigInt(1) // eslint-disable-line node/no-unsupported-features/es-builtins
   );
 }
@@ -80,9 +79,11 @@ describe('Meter', () => {
   const labels: api.Labels = { [keyb]: 'value2', [keya]: 'value1' };
 
   beforeEach(() => {
-    meter = new MeterProvider({
-      logger: new NoopLogger(),
-    }).getMeter('test-meter');
+    meter = new MeterProvider().getMeter('test-meter');
+  });
+
+  afterEach(() => {
+    sinon.restore();
   });
 
   describe('#counter', () => {
@@ -154,7 +155,7 @@ describe('Meter', () => {
       const [record] = await counter.getMetricRecord();
       const { name, version } = record.instrumentationLibrary;
       assert.strictEqual(name, 'test-meter');
-      assert.strictEqual(version, '*');
+      assert.strictEqual(version, undefined);
     });
 
     describe('.bind()', () => {
@@ -408,7 +409,7 @@ describe('Meter', () => {
 
       it('should truncate non-integer values for INT valueType', async () => {
         const upDownCounter = meter.createUpDownCounter('name', {
-          valueType: ValueType.INT,
+          valueType: api.ValueType.INT,
         });
         const boundCounter = upDownCounter.bind(labels);
 
@@ -422,13 +423,13 @@ describe('Meter', () => {
 
       it('should ignore non-number values for INT valueType', async () => {
         const upDownCounter = meter.createUpDownCounter('name', {
-          valueType: ValueType.DOUBLE,
+          valueType: api.ValueType.DOUBLE,
         });
         const boundCounter = upDownCounter.bind(labels);
 
         await Promise.all(
           nonNumberValues.map(async val => {
-            // @ts-expect-error
+            // @ts-expect-error verify non number types
             boundCounter.add(val);
             await meter.collect();
             const [record1] = meter.getProcessor().checkPointSet();
@@ -440,13 +441,13 @@ describe('Meter', () => {
 
       it('should ignore non-number values for DOUBLE valueType', async () => {
         const upDownCounter = meter.createUpDownCounter('name', {
-          valueType: ValueType.DOUBLE,
+          valueType: api.ValueType.DOUBLE,
         });
         const boundCounter = upDownCounter.bind(labels);
 
         await Promise.all(
           nonNumberValues.map(async val => {
-            // @ts-expect-error
+            // @ts-expect-error verify non number types
             boundCounter.add(val);
             await meter.collect();
             const [record1] = meter.getProcessor().checkPointSet();
@@ -607,7 +608,7 @@ describe('Meter', () => {
       const [record] = await valueRecorder.getMetricRecord();
       const { name, version } = record.instrumentationLibrary;
       assert.strictEqual(name, 'test-meter');
-      assert.strictEqual(version, '*');
+      assert.strictEqual(version, undefined);
     });
 
     describe('names', () => {
@@ -721,7 +722,7 @@ describe('Meter', () => {
 
         await Promise.all(
           nonNumberValues.map(async val => {
-            // @ts-expect-error
+            // @ts-expect-error verify non number types
             boundValueRecorder.record(val);
             await meter.collect();
             const [record1] = meter.getProcessor().checkPointSet();
@@ -779,7 +780,8 @@ describe('Meter', () => {
     });
 
     it('should return noop observer when name is invalid', () => {
-      const spy = sinon.stub(meter['_logger'], 'warn');
+      // Need to stub/spy on the underlying logger as the "diag" instance is global
+      const spy = sinon.stub(diag, 'warn');
       const sumObserver = meter.createSumObserver('na me');
       assert.ok(sumObserver === api.NOOP_SUM_OBSERVER_METRIC);
       const args = spy.args[0];
@@ -802,8 +804,8 @@ describe('Meter', () => {
       let counter = 0;
 
       function getValue() {
-        console.log('getting value, counter:', counter);
-        if (++counter % 2 == 0) {
+        diag.info('getting value, counter:', counter);
+        if (++counter % 2 === 0) {
           return 3;
         }
         return -1;
@@ -816,7 +818,7 @@ describe('Meter', () => {
         },
         (observerResult: api.ObserverResult) => {
           // simulate async
-          return new Promise(resolve => {
+          return new Promise<void>(resolve => {
             setTimeout(() => {
               observerResult.observe(getValue(), { pid: '123', core: '1' });
               resolve();
@@ -920,7 +922,8 @@ describe('Meter', () => {
     });
 
     it('should return noop observer when name is invalid', () => {
-      const spy = sinon.stub(meter['_logger'], 'warn');
+      // Need to stub/spy on the underlying logger as the "diag" instance is global
+      const spy = sinon.stub(diag, 'warn');
       const valueObserver = meter.createValueObserver('na me');
       assert.ok(valueObserver === api.NOOP_VALUE_OBSERVER_METRIC);
       const args = spy.args[0];
@@ -947,7 +950,7 @@ describe('Meter', () => {
         },
         (observerResult: api.ObserverResult) => {
           // simulate async
-          return new Promise(resolve => {
+          return new Promise<void>(resolve => {
             setTimeout(() => {
               observerResult.observe(getCpuUsage(), { pid: '123', core: '1' });
               observerResult.observe(getCpuUsage(), { pid: '123', core: '2' });
@@ -1001,7 +1004,8 @@ describe('Meter', () => {
     });
 
     it('should return noop observer when name is invalid', () => {
-      const spy = sinon.stub(meter['_logger'], 'warn');
+      // Need to stub/spy on the underlying logger as the "diag" instance is global
+      const spy = sinon.stub(diag, 'warn');
       const upDownSumObserver = meter.createUpDownSumObserver('na me');
       assert.ok(upDownSumObserver === api.NOOP_UP_DOWN_SUM_OBSERVER_METRIC);
       const args = spy.args[0];
@@ -1038,7 +1042,7 @@ describe('Meter', () => {
         },
         (observerResult: api.ObserverResult) => {
           // simulate async
-          return new Promise(resolve => {
+          return new Promise<void>(resolve => {
             setTimeout(() => {
               observerResult.observe(getValue(), { pid: '123', core: '1' });
               resolve();
@@ -1297,7 +1301,7 @@ describe('Meter', () => {
       const [record] = await observer.getMetricRecord();
       const { name, version } = record.instrumentationLibrary;
       assert.strictEqual(name, 'test-meter');
-      assert.strictEqual(version, '*');
+      assert.strictEqual(version, undefined);
     });
   });
 

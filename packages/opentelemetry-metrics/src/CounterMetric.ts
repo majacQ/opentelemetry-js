@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import * as api from '@opentelemetry/api';
+import * as api from '@opentelemetry/api-metrics';
 import { InstrumentationLibrary } from '@opentelemetry/core';
 import { Resource } from '@opentelemetry/resources';
 import { BoundCounter } from './BoundInstrument';
@@ -38,7 +38,6 @@ export class CounterMetric extends Metric<BoundCounter> implements api.Counter {
       labels,
       this._disabled,
       this._valueType,
-      this._logger,
       this._processor.aggregatorFor(this._descriptor)
     );
   }

@@ -14,26 +14,13 @@
  * limitations under the License.
  */
 
-import * as api from '@opentelemetry/api';
+import { diag } from '@opentelemetry/api';
+import {
+  Counter,
+  ValueObserver,
+  ValueRecorder,
+} from '@opentelemetry/api-metrics';
 import * as core from '@opentelemetry/core';
-import * as http from 'http';
-import * as assert from 'assert';
-import * as sinon from 'sinon';
-import {
-  CollectorMetricExporter,
-  CollectorExporterNodeConfigBase,
-} from '../../src/platform/node';
-import * as collectorTypes from '../../src/types';
-import { MockedResponse } from './nodeHelpers';
-import {
-  mockCounter,
-  mockObserver,
-  ensureExportMetricsServiceRequestIsSet,
-  ensureCounterIsCorrect,
-  mockValueRecorder,
-  ensureValueRecorderIsCorrect,
-  ensureObserverIsCorrect,
-} from '../helper';
 import {
   BoundCounter,
   BoundObserver,
@@ -41,6 +28,24 @@ import {
   Metric,
   MetricRecord,
 } from '@opentelemetry/metrics';
+import * as assert from 'assert';
+import * as http from 'http';
+import * as sinon from 'sinon';
+import {
+  CollectorExporterNodeConfigBase,
+  CollectorMetricExporter,
+} from '../../src/platform/node';
+import * as collectorTypes from '../../src/types';
+import {
+  ensureCounterIsCorrect,
+  ensureExportMetricsServiceRequestIsSet,
+  ensureObserverIsCorrect,
+  ensureValueRecorderIsCorrect,
+  mockCounter,
+  mockObserver,
+  mockValueRecorder,
+} from '../helper';
+import { MockedResponse } from './nodeHelpers';
 
 const fakeRequest = {
   end: function () {},
@@ -53,16 +58,20 @@ const address = 'localhost:1501';
 describe('CollectorMetricExporter - node with json over http', () => {
   let collectorExporter: CollectorMetricExporter;
   let collectorExporterConfig: CollectorExporterNodeConfigBase;
-  let spyRequest: sinon.SinonSpy;
-  let spyWrite: sinon.SinonSpy;
+  let stubRequest: sinon.SinonStub;
+  let stubWrite: sinon.SinonStub;
   let metrics: MetricRecord[];
+
+  afterEach(() => {
+    sinon.restore();
+  });
+
   describe('instance', () => {
     it('should warn about metadata when using json', () => {
       const metadata = 'foo';
-      const logger = new core.ConsoleLogger(core.LogLevel.DEBUG);
-      const spyLoggerWarn = sinon.stub(logger, 'warn');
+      // Need to stub/spy on the underlying logger as the "diag" instance is global
+      const spyLoggerWarn = sinon.stub(diag, 'warn');
       collectorExporter = new CollectorMetricExporter({
-        logger,
         serviceName: 'basic-service',
         url: address,
         metadata,
@@ -72,16 +81,54 @@ describe('CollectorMetricExporter - node with json over http', () => {
     });
   });
 
+  describe('when configuring via environment', () => {
+    const envSource = process.env;
+    it('should use url defined in env', () => {
+      envSource.OTEL_EXPORTER_OTLP_ENDPOINT = 'http://foo.bar';
+      const collectorExporter = new CollectorMetricExporter();
+      assert.strictEqual(
+        collectorExporter.url,
+        envSource.OTEL_EXPORTER_OTLP_ENDPOINT
+      );
+      envSource.OTEL_EXPORTER_OTLP_ENDPOINT = '';
+    });
+    it('should override global exporter url with signal url defined in env', () => {
+      envSource.OTEL_EXPORTER_OTLP_ENDPOINT = 'http://foo.bar';
+      envSource.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT = 'http://foo.metrics';
+      const collectorExporter = new CollectorMetricExporter();
+      assert.strictEqual(
+        collectorExporter.url,
+        envSource.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+      );
+      envSource.OTEL_EXPORTER_OTLP_ENDPOINT = '';
+      envSource.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT = '';
+    });
+    it('should use headers defined via env', () => {
+      envSource.OTEL_EXPORTER_OTLP_HEADERS = 'foo=bar';
+      const collectorExporter = new CollectorMetricExporter();
+      assert.strictEqual(collectorExporter.headers.foo, 'bar');
+      envSource.OTEL_EXPORTER_OTLP_HEADERS = '';
+    });
+    it('should override global headers config with signal headers defined via env', () => {
+      envSource.OTEL_EXPORTER_OTLP_HEADERS = 'foo=bar,bar=foo';
+      envSource.OTEL_EXPORTER_OTLP_METRICS_HEADERS = 'foo=boo';
+      const collectorExporter = new CollectorMetricExporter();
+      assert.strictEqual(collectorExporter.headers.foo, 'boo');
+      assert.strictEqual(collectorExporter.headers.bar, 'foo');
+      envSource.OTEL_EXPORTER_OTLP_METRICS_HEADERS = '';
+      envSource.OTEL_EXPORTER_OTLP_HEADERS = '';
+    });
+  });
+
   describe('export', () => {
     beforeEach(async () => {
-      spyRequest = sinon.stub(http, 'request').returns(fakeRequest as any);
-      spyWrite = sinon.stub(fakeRequest, 'write');
+      stubRequest = sinon.stub(http, 'request').returns(fakeRequest as any);
+      stubWrite = sinon.stub(fakeRequest, 'write');
       collectorExporterConfig = {
         headers: {
           foo: 'bar',
         },
         hostname: 'foo',
-        logger: new core.NoopLogger(),
         serviceName: 'bar',
         attributes: {},
         url: 'http://foo.bar.com',
@@ -94,15 +141,15 @@ describe('CollectorMetricExporter - node with json over http', () => {
         value: 1592602232694000000,
       });
       metrics = [];
-      const counter: Metric<BoundCounter> & api.Counter = mockCounter();
-      const observer: Metric<BoundObserver> & api.ValueObserver = mockObserver(
+      const counter: Metric<BoundCounter> & Counter = mockCounter();
+      const observer: Metric<BoundObserver> & ValueObserver = mockObserver(
         observerResult => {
           observerResult.observe(6, {});
         },
         'double-observer2'
       );
       const recorder: Metric<BoundValueRecorder> &
-        api.ValueRecorder = mockValueRecorder();
+        ValueRecorder = mockValueRecorder();
       counter.add(1);
       recorder.record(7);
       recorder.record(14);
@@ -112,16 +159,11 @@ describe('CollectorMetricExporter - node with json over http', () => {
       metrics.push((await recorder.getMetricRecord())[0]);
     });
 
-    afterEach(() => {
-      spyRequest.restore();
-      spyWrite.restore();
-    });
-
     it('should open the connection', done => {
       collectorExporter.export(metrics, () => {});
 
       setTimeout(() => {
-        const args = spyRequest.args[0];
+        const args = stubRequest.args[0];
         const options = args[0];
 
         assert.strictEqual(options.hostname, 'foo.bar.com');
@@ -135,7 +177,7 @@ describe('CollectorMetricExporter - node with json over http', () => {
       collectorExporter.export(metrics, () => {});
 
       setTimeout(() => {
-        const args = spyRequest.args[0];
+        const args = stubRequest.args[0];
         const options = args[0];
         assert.strictEqual(options.headers['foo'], 'bar');
         done();
@@ -146,7 +188,7 @@ describe('CollectorMetricExporter - node with json over http', () => {
       collectorExporter.export(metrics, () => {});
 
       setTimeout(() => {
-        const args = spyRequest.args[0];
+        const args = stubRequest.args[0];
         const options = args[0];
         const agent = options.agent;
         assert.strictEqual(agent.keepAlive, true);
@@ -159,7 +201,7 @@ describe('CollectorMetricExporter - node with json over http', () => {
       collectorExporter.export(metrics, () => {});
 
       setTimeout(() => {
-        const writeArgs = spyWrite.args[0];
+        const writeArgs = stubWrite.args[0];
         const json = JSON.parse(
           writeArgs[0]
         ) as collectorTypes.opentelemetryProto.collector.metrics.v1.ExportMetricsServiceRequest;
@@ -197,19 +239,20 @@ describe('CollectorMetricExporter - node with json over http', () => {
     });
 
     it('should log the successful message', done => {
-      const spyLoggerError = sinon.stub(collectorExporter.logger, 'error');
+      // Need to stub/spy on the underlying logger as the "diag" instance is global
+      const stubLoggerError = sinon.stub(diag, 'error');
 
       const responseSpy = sinon.spy();
       collectorExporter.export(metrics, responseSpy);
 
       setTimeout(() => {
         const mockRes = new MockedResponse(200);
-        const args = spyRequest.args[0];
+        const args = stubRequest.args[0];
         const callback = args[1];
         callback(mockRes);
         mockRes.send('success');
         setTimeout(() => {
-          assert.strictEqual(spyLoggerError.args.length, 0);
+          assert.strictEqual(stubLoggerError.args.length, 0);
           assert.strictEqual(
             responseSpy.args[0][0].code,
             core.ExportResultCode.SUCCESS
@@ -220,13 +263,7 @@ describe('CollectorMetricExporter - node with json over http', () => {
     });
 
     it('should log the error message', done => {
-      const spyLoggerError = sinon.spy();
-      const handler = core.loggingErrorHandler({
-        debug: sinon.fake(),
-        info: sinon.fake(),
-        warn: sinon.fake(),
-        error: spyLoggerError,
-      });
+      const handler = core.loggingErrorHandler();
       core.setGlobalErrorHandler(handler);
 
       const responseSpy = sinon.spy();
@@ -234,7 +271,7 @@ describe('CollectorMetricExporter - node with json over http', () => {
 
       setTimeout(() => {
         const mockRes = new MockedResponse(400);
-        const args = spyRequest.args[0];
+        const args = stubRequest.args[0];
         const callback = args[1];
         callback(mockRes);
         mockRes.send('failed');

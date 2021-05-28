@@ -14,15 +14,21 @@
  * limitations under the License.
  */
 
+import { diag } from '@opentelemetry/api';
 import {
   Detector,
   Resource,
-  ResourceDetectionConfigWithLogger,
-  CONTAINER_RESOURCE,
+  ResourceDetectionConfig,
 } from '@opentelemetry/resources';
+import {
+  CloudProviderValues,
+  CloudPlatformValues,
+  ResourceAttributes,
+} from '@opentelemetry/semantic-conventions';
 import * as util from 'util';
 import * as fs from 'fs';
 import * as os from 'os';
+import { getEnv } from '@opentelemetry/core';
 
 /**
  * The AwsEcsDetector can be used to detect if a process is running in AWS
@@ -34,23 +40,23 @@ export class AwsEcsDetector implements Detector {
   readonly DEFAULT_CGROUP_PATH = '/proc/self/cgroup';
   private static readFileAsync = util.promisify(fs.readFile);
 
-  async detect(config: ResourceDetectionConfigWithLogger): Promise<Resource> {
-    if (
-      !process.env.ECS_CONTAINER_METADATA_URI_V4 &&
-      !process.env.ECS_CONTAINER_METADATA_URI
-    ) {
-      config.logger.debug('AwsEcsDetector failed: Process is not on ECS');
+  async detect(_config?: ResourceDetectionConfig): Promise<Resource> {
+    const env = getEnv();
+    if (!env.ECS_CONTAINER_METADATA_URI_V4 && !env.ECS_CONTAINER_METADATA_URI) {
+      diag.debug('AwsEcsDetector failed: Process is not on ECS');
       return Resource.empty();
     }
 
     const hostName = os.hostname();
-    const containerId = await this._getContainerId(config);
+    const containerId = await this._getContainerId();
 
     return !hostName && !containerId
       ? Resource.empty()
       : new Resource({
-          [CONTAINER_RESOURCE.NAME]: hostName || '',
-          [CONTAINER_RESOURCE.ID]: containerId || '',
+          [ResourceAttributes.CLOUD_PROVIDER]: CloudProviderValues.AWS,
+          [ResourceAttributes.CLOUD_PLATFORM]: CloudPlatformValues.AWS_ECS,
+          [ResourceAttributes.CONTAINER_NAME]: hostName || '',
+          [ResourceAttributes.CONTAINER_ID]: containerId || '',
         });
   }
 
@@ -61,9 +67,7 @@ export class AwsEcsDetector implements Detector {
    * we do not throw an error but throw warning message
    * and then return null string
    */
-  private async _getContainerId(
-    config: ResourceDetectionConfigWithLogger
-  ): Promise<string | undefined> {
+  private async _getContainerId(): Promise<string | undefined> {
     try {
       const rawData = await AwsEcsDetector.readFileAsync(
         this.DEFAULT_CGROUP_PATH,
@@ -76,9 +80,7 @@ export class AwsEcsDetector implements Detector {
         }
       }
     } catch (e) {
-      config.logger.warn(
-        `AwsEcsDetector failed to read container ID: ${e.message}`
-      );
+      diag.warn(`AwsEcsDetector failed to read container ID: ${e.message}`);
     }
     return undefined;
   }

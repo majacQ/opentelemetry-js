@@ -16,20 +16,17 @@
 
 import {
   Context,
-  getParentSpanContext,
   isSpanContextValid,
   isValidSpanId,
   isValidTraceId,
-  setExtractedSpanContext,
   TextMapGetter,
   TextMapPropagator,
-  TextMapSetter,
+  TextMapSetter, trace,
   TraceFlags,
 } from '@opentelemetry/api';
+import { isTracingSuppressed } from '@opentelemetry/core';
 import { B3_DEBUG_FLAG_KEY } from './common';
-
-/** B3 single-header name */
-export const B3_CONTEXT_HEADER = 'b3';
+import { B3_CONTEXT_HEADER } from './constants';
 
 const B3_CONTEXT_REGEX = /((?:[0-9a-f]{16}){1,2})-([0-9a-f]{16})(?:-([01d](?![0-9a-f])))?(?:-([0-9a-f]{16}))?/;
 const PADDING = '0'.repeat(16);
@@ -37,7 +34,7 @@ const SAMPLED_VALUES = new Set(['d', '1']);
 const DEBUG_STATE = 'd';
 
 function convertToTraceId128(traceId: string): string {
-  return traceId.length == 32 ? traceId : `${PADDING}${traceId}`;
+  return traceId.length === 32 ? traceId : `${PADDING}${traceId}`;
 }
 
 function convertToTraceFlags(samplingState: string | undefined): TraceFlags {
@@ -53,8 +50,13 @@ function convertToTraceFlags(samplingState: string | undefined): TraceFlags {
  */
 export class B3SinglePropagator implements TextMapPropagator {
   inject(context: Context, carrier: unknown, setter: TextMapSetter) {
-    const spanContext = getParentSpanContext(context);
-    if (!spanContext || !isSpanContextValid(spanContext)) return;
+    const spanContext = trace.getSpanContext(context);
+    if (
+      !spanContext ||
+      !isSpanContextValid(spanContext) ||
+      isTracingSuppressed(context)
+    )
+      return;
 
     const samplingState =
       context.getValue(B3_DEBUG_FLAG_KEY) || spanContext.traceFlags & 0x1;
@@ -81,7 +83,7 @@ export class B3SinglePropagator implements TextMapPropagator {
       context = context.setValue(B3_DEBUG_FLAG_KEY, samplingState);
     }
 
-    return setExtractedSpanContext(context, {
+    return trace.setSpanContext(context, {
       traceId,
       spanId,
       isRemote: true,

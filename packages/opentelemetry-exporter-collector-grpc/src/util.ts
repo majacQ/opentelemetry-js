@@ -14,24 +14,25 @@
  * limitations under the License.
  */
 
+import * as grpc from '@grpc/grpc-js';
 import * as protoLoader from '@grpc/proto-loader';
+import { diag } from '@opentelemetry/api';
+import { globalErrorHandler } from '@opentelemetry/core';
 import { collectorTypes } from '@opentelemetry/exporter-collector';
-import * as grpc from 'grpc';
 import * as path from 'path';
-
+import { CollectorExporterNodeBase } from './CollectorExporterNodeBase';
+import { URL } from 'url';
 import {
   CollectorExporterConfigNode,
   GRPCQueueItem,
   ServiceClientType,
 } from './types';
-import { CollectorExporterNodeBase } from './CollectorExporterNodeBase';
 
 export function onInit<ExportItem, ServiceRequest>(
   collector: CollectorExporterNodeBase<ExportItem, ServiceRequest>,
   config: CollectorExporterConfigNode
 ): void {
   collector.grpcQueue = [];
-  const serverAddress = removeProtocol(collector.url);
   const credentials: grpc.ChannelCredentials =
     config.credentials || grpc.credentials.createInsecure();
 
@@ -50,15 +51,17 @@ export function onInit<ExportItem, ServiceRequest>(
       const packageObject: any = grpc.loadPackageDefinition(packageDefinition);
 
       if (collector.getServiceClientType() === ServiceClientType.SPANS) {
-        collector.serviceClient = new packageObject.opentelemetry.proto.collector.trace.v1.TraceService(
-          serverAddress,
-          credentials
-        );
+        collector.serviceClient =
+          new packageObject.opentelemetry.proto.collector.trace.v1.TraceService(
+            collector.url,
+            credentials,
+          );
       } else {
-        collector.serviceClient = new packageObject.opentelemetry.proto.collector.metrics.v1.MetricsService(
-          serverAddress,
-          credentials
-        );
+        collector.serviceClient =
+          new packageObject.opentelemetry.proto.collector.metrics.v1.MetricsService(
+            collector.url,
+            credentials,
+          );
       }
 
       if (collector.grpcQueue.length > 0) {
@@ -67,6 +70,9 @@ export function onInit<ExportItem, ServiceRequest>(
           collector.send(item.objects, item.onSuccess, item.onError);
         });
       }
+    })
+    .catch(err => {
+      globalErrorHandler(err);
     });
 }
 
@@ -81,13 +87,13 @@ export function send<ExportItem, ServiceRequest>(
 
     collector.serviceClient.export(
       serviceRequest,
-      collector.metadata,
+      collector.metadata || new grpc.Metadata(),
       (err: collectorTypes.ExportServiceError) => {
         if (err) {
-          collector.logger.error('Service request', serviceRequest);
+          diag.error('Service request', serviceRequest);
           onError(err);
         } else {
-          collector.logger.debug('Objects sent');
+          diag.debug('Objects sent');
           onSuccess();
         }
       }
@@ -101,6 +107,17 @@ export function send<ExportItem, ServiceRequest>(
   }
 }
 
-function removeProtocol(url: string): string {
-  return url.replace(/^https?:\/\//, '');
+export function validateAndNormalizeUrl(url: string): string {
+  const target = new URL(url);
+  if (target.pathname !== '/') {
+    diag.warn(
+      'URL path should not be set when using grpc, the path part of the URL will be ignored.'
+    );
+  }
+  if (target.protocol !== '' && !target.protocol?.match(/(http|grpc)s?/)) {
+    diag.warn(
+      'URL protocol should be http(s):// or grpc(s)://. Using grpc://.'
+    );
+  }
+  return target.host;
 }

@@ -14,9 +14,11 @@
  * limitations under the License.
  */
 
-import { SpanKind, Logger, Attributes } from '@opentelemetry/api';
+import { SpanAttributes, SpanKind, SpanStatusCode } from '@opentelemetry/api';
 
 /* eslint-disable @typescript-eslint/no-namespace */
+/* eslint-disable @typescript-eslint/no-unused-vars */
+
 export namespace opentelemetryProto {
   export namespace collector {
     export namespace trace.v1 {
@@ -250,34 +252,14 @@ export namespace opentelemetryProto {
       droppedEventsCount: number;
       links?: opentelemetryProto.trace.v1.Span.Link[];
       droppedLinksCount: number;
-      status?: Status;
+      status?: SpanStatus;
     }
 
-    export interface Status {
+    export interface SpanStatus {
       /** The status code of this message. */
-      code: StatusCode;
+      code: SpanStatusCode;
       /** A developer-facing error message. */
       message?: string;
-    }
-
-    /**
-     * An enumeration of status codes.
-     * https://github.com/open-telemetry/opentelemetry-proto/blob/master/opentelemetry/proto/trace/v1/trace.proto#L304
-     */
-    export enum StatusCode {
-      /**
-       * The default status.
-       */
-      UNSET = 0,
-      /**
-       * The operation has been validated by an Application developer or
-       * Operator to have completed successfully.
-       */
-      OK = 1,
-      /**
-       * The operation contains an error.
-       */
-      ERROR = 2,
     }
 
     export interface TraceConfig {
@@ -311,7 +293,7 @@ export namespace opentelemetryProto {
 
     export interface InstrumentationLibrary {
       name: string;
-      version: string;
+      version?: string;
     }
 
     export interface StringKeyValue {
@@ -361,9 +343,8 @@ export interface ExportServiceError {
 export interface CollectorExporterConfigBase {
   headers?: Partial<Record<string, unknown>>;
   hostname?: string;
-  logger?: Logger;
   serviceName?: string;
-  attributes?: Attributes;
+  attributes?: SpanAttributes;
   url?: string;
   concurrencyLimit?: number;
 }

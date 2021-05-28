@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 
-import * as api from '@opentelemetry/api';
+import { TracerProvider, Tracer, trace } from '@opentelemetry/api';
+import { Meter, MeterProvider, metrics } from '@opentelemetry/api-metrics';
 import * as shimmer from 'shimmer';
 import { InstrumentationModuleDefinition } from './platform/node';
 import * as types from './types';
@@ -26,9 +27,8 @@ export abstract class InstrumentationAbstract<T = any>
   implements types.Instrumentation {
   protected _config: types.InstrumentationConfig;
 
-  private _tracer: api.Tracer;
-  private _meter: api.Meter;
-  protected _logger: api.Logger;
+  private _tracer: Tracer;
+  private _meter: Meter;
 
   constructor(
     public readonly instrumentationName: string,
@@ -39,17 +39,10 @@ export abstract class InstrumentationAbstract<T = any>
       enabled: true,
       ...config,
     };
-    this._logger = this._config.logger || new api.NoopLogger();
 
-    this._tracer = api.trace.getTracer(
-      instrumentationName,
-      instrumentationVersion
-    );
+    this._tracer = trace.getTracer(instrumentationName, instrumentationVersion);
 
-    this._meter = api.metrics.getMeter(
-      instrumentationName,
-      instrumentationVersion
-    );
+    this._meter = metrics.getMeter(instrumentationName, instrumentationVersion);
   }
 
   /* Api to wrap instrumented method */
@@ -62,7 +55,7 @@ export abstract class InstrumentationAbstract<T = any>
   protected _massUnwrap = shimmer.massUnwrap;
 
   /* Returns meter */
-  protected get meter(): api.Meter {
+  protected get meter(): Meter {
     return this._meter;
   }
 
@@ -70,18 +63,31 @@ export abstract class InstrumentationAbstract<T = any>
    * Sets MeterProvider to this plugin
    * @param meterProvider
    */
-  public setMeterProvider(meterProvider: api.MeterProvider) {
+  public setMeterProvider(meterProvider: MeterProvider) {
     this._meter = meterProvider.getMeter(
       this.instrumentationName,
       this.instrumentationVersion
     );
   }
 
+  /* Returns InstrumentationConfig */
+  public getConfig() {
+    return this._config;
+  }
+
+  /**
+   * Sets InstrumentationConfig to this plugin
+   * @param InstrumentationConfig
+   */
+  public setConfig(config: types.InstrumentationConfig = {}) {
+    this._config = Object.assign({}, config);
+  }
+
   /**
    * Sets TraceProvider to this plugin
    * @param tracerProvider
    */
-  public setTracerProvider(tracerProvider: api.TracerProvider) {
+  public setTracerProvider(tracerProvider: TracerProvider) {
     this._tracer = tracerProvider.getTracer(
       this.instrumentationName,
       this.instrumentationVersion
@@ -89,7 +95,7 @@ export abstract class InstrumentationAbstract<T = any>
   }
 
   /* Returns tracer */
-  protected get tracer(): api.Tracer {
+  protected get tracer(): Tracer {
     return this._tracer;
   }
 

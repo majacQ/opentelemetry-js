@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-import * as api from '@opentelemetry/api';
-import { ExportResultCode, NoopLogger } from '@opentelemetry/core';
-import * as assert from 'assert';
-import * as sinon from 'sinon';
-import { CollectorMetricExporter } from '../../src/platform/browser/index';
-import { CollectorExporterConfigBase } from '../../src/types';
-import * as collectorTypes from '../../src/types';
+import { diag } from '@opentelemetry/api';
+import {
+  Counter,
+  ValueObserver,
+  ValueRecorder,
+} from '@opentelemetry/api-metrics';
+import { ExportResultCode, hrTimeToNanoseconds } from '@opentelemetry/core';
 import {
   BoundCounter,
   BoundObserver,
@@ -28,35 +28,36 @@ import {
   Metric,
   MetricRecord,
 } from '@opentelemetry/metrics';
+import * as assert from 'assert';
+import * as sinon from 'sinon';
+import { CollectorMetricExporter } from '../../src/platform/browser/index';
+import * as collectorTypes from '../../src/types';
+import { CollectorExporterConfigBase } from '../../src/types';
 import {
-  mockCounter,
-  mockObserver,
   ensureCounterIsCorrect,
-  ensureObserverIsCorrect,
-  ensureWebResourceIsCorrect,
   ensureExportMetricsServiceRequestIsSet,
   ensureHeadersContain,
-  mockValueRecorder,
+  ensureObserverIsCorrect,
   ensureValueRecorderIsCorrect,
+  ensureWebResourceIsCorrect,
+  mockCounter,
+  mockObserver,
+  mockValueRecorder,
 } from '../helper';
-import { hrTimeToNanoseconds } from '@opentelemetry/core';
-
-const sendBeacon = navigator.sendBeacon;
 
 describe('CollectorMetricExporter - web', () => {
   let collectorExporter: CollectorMetricExporter;
-  let spyOpen: any;
-  let spySend: any;
-  let spyBeacon: any;
+  let stubOpen: sinon.SinonStub;
+  let stubBeacon: sinon.SinonStub;
   let metrics: MetricRecord[];
 
   beforeEach(async () => {
-    spyOpen = sinon.stub(XMLHttpRequest.prototype, 'open');
-    spySend = sinon.stub(XMLHttpRequest.prototype, 'send');
-    spyBeacon = sinon.stub(navigator, 'sendBeacon');
+    stubOpen = sinon.stub(XMLHttpRequest.prototype, 'open');
+    sinon.stub(XMLHttpRequest.prototype, 'send');
+    stubBeacon = sinon.stub(navigator, 'sendBeacon');
     metrics = [];
-    const counter: Metric<BoundCounter> & api.Counter = mockCounter();
-    const observer: Metric<BoundObserver> & api.ValueObserver = mockObserver(
+    const counter: Metric<BoundCounter> & Counter = mockCounter();
+    const observer: Metric<BoundObserver> & ValueObserver = mockObserver(
       observerResult => {
         observerResult.observe(3, {});
         observerResult.observe(6, {});
@@ -64,7 +65,7 @@ describe('CollectorMetricExporter - web', () => {
       'double-observer2'
     );
     const recorder: Metric<BoundValueRecorder> &
-      api.ValueRecorder = mockValueRecorder();
+      ValueRecorder = mockValueRecorder();
     counter.add(1);
     recorder.record(7);
     recorder.record(14);
@@ -75,17 +76,13 @@ describe('CollectorMetricExporter - web', () => {
   });
 
   afterEach(() => {
-    navigator.sendBeacon = sendBeacon;
-    spyOpen.restore();
-    spySend.restore();
-    spyBeacon.restore();
+    sinon.restore();
   });
 
   describe('export', () => {
     describe('when "sendBeacon" is available', () => {
       beforeEach(() => {
         collectorExporter = new CollectorMetricExporter({
-          logger: new NoopLogger(),
           url: 'http://foo.bar.com',
           serviceName: 'bar',
         });
@@ -98,7 +95,7 @@ describe('CollectorMetricExporter - web', () => {
         collectorExporter.export(metrics, () => {});
 
         setTimeout(() => {
-          const args = spyBeacon.args[0];
+          const args = stubBeacon.args[0];
           const url = args[0];
           const body = args[1];
           const json = JSON.parse(
@@ -152,9 +149,9 @@ describe('CollectorMetricExporter - web', () => {
           }
 
           assert.strictEqual(url, 'http://foo.bar.com');
-          assert.strictEqual(spyBeacon.callCount, 1);
+          assert.strictEqual(stubBeacon.callCount, 1);
 
-          assert.strictEqual(spyOpen.callCount, 0);
+          assert.strictEqual(stubOpen.callCount, 0);
 
           ensureExportMetricsServiceRequestIsSet(json);
 
@@ -163,10 +160,10 @@ describe('CollectorMetricExporter - web', () => {
       });
 
       it('should log the successful message', done => {
-        const spyLoggerDebug = sinon.stub(collectorExporter.logger, 'debug');
-        const spyLoggerError = sinon.stub(collectorExporter.logger, 'error');
-        spyBeacon.restore();
-        spyBeacon = sinon.stub(window.navigator, 'sendBeacon').returns(true);
+        // Need to stub/spy on the underlying logger as the "diag" instance is global
+        const spyLoggerDebug = sinon.stub(diag, 'debug');
+        const spyLoggerError = sinon.stub(diag, 'error');
+        stubBeacon.returns(true);
 
         collectorExporter.export(metrics, () => {});
 
@@ -180,8 +177,7 @@ describe('CollectorMetricExporter - web', () => {
       });
 
       it('should log the error message', done => {
-        spyBeacon.restore();
-        spyBeacon = sinon.stub(window.navigator, 'sendBeacon').returns(false);
+        stubBeacon.returns(false);
 
         collectorExporter.export(metrics, result => {
           assert.deepStrictEqual(result.code, ExportResultCode.FAILED);
@@ -196,7 +192,6 @@ describe('CollectorMetricExporter - web', () => {
       beforeEach(() => {
         (window.navigator as any).sendBeacon = false;
         collectorExporter = new CollectorMetricExporter({
-          logger: new NoopLogger(),
           url: 'http://foo.bar.com',
           serviceName: 'bar',
         });
@@ -267,7 +262,7 @@ describe('CollectorMetricExporter - web', () => {
             ensureWebResourceIsCorrect(resource);
           }
 
-          assert.strictEqual(spyBeacon.callCount, 0);
+          assert.strictEqual(stubBeacon.callCount, 0);
           ensureExportMetricsServiceRequestIsSet(json);
 
           done();
@@ -275,8 +270,9 @@ describe('CollectorMetricExporter - web', () => {
       });
 
       it('should log the successful message', done => {
-        const spyLoggerDebug = sinon.stub(collectorExporter.logger, 'debug');
-        const spyLoggerError = sinon.stub(collectorExporter.logger, 'error');
+        // Need to stub/spy on the underlying logger as the "diag" instance is global
+        const spyLoggerDebug = sinon.stub(diag, 'debug');
+        const spyLoggerError = sinon.stub(diag, 'error');
 
         collectorExporter.export(metrics, () => {});
 
@@ -288,7 +284,7 @@ describe('CollectorMetricExporter - web', () => {
           assert.strictEqual(response, 'xhr success');
           assert.strictEqual(spyLoggerError.args.length, 0);
 
-          assert.strictEqual(spyBeacon.callCount, 0);
+          assert.strictEqual(stubBeacon.callCount, 0);
           done();
         });
       });
@@ -297,7 +293,7 @@ describe('CollectorMetricExporter - web', () => {
         collectorExporter.export(metrics, result => {
           assert.deepStrictEqual(result.code, ExportResultCode.FAILED);
           assert.ok(result.error?.message.includes('Failed to export'));
-          assert.strictEqual(spyBeacon.callCount, 0);
+          assert.strictEqual(stubBeacon.callCount, 0);
           done();
         });
 
@@ -313,7 +309,7 @@ describe('CollectorMetricExporter - web', () => {
           const request = server.requests[0];
           request.respond(200);
 
-          assert.strictEqual(spyBeacon.callCount, 0);
+          assert.strictEqual(stubBeacon.callCount, 0);
           done();
         });
       });
@@ -330,7 +326,6 @@ describe('CollectorMetricExporter - web', () => {
 
     beforeEach(() => {
       collectorExporterConfig = {
-        logger: new NoopLogger(),
         headers: customHeaders,
       };
       server = sinon.fakeServer.create();
@@ -353,8 +348,8 @@ describe('CollectorMetricExporter - web', () => {
           const [{ requestHeaders }] = server.requests;
 
           ensureHeadersContain(requestHeaders, customHeaders);
-          assert.strictEqual(spyBeacon.callCount, 0);
-          assert.strictEqual(spyOpen.callCount, 0);
+          assert.strictEqual(stubBeacon.callCount, 0);
+          assert.strictEqual(stubOpen.callCount, 0);
 
           done();
         });
@@ -376,12 +371,54 @@ describe('CollectorMetricExporter - web', () => {
           const [{ requestHeaders }] = server.requests;
 
           ensureHeadersContain(requestHeaders, customHeaders);
-          assert.strictEqual(spyBeacon.callCount, 0);
-          assert.strictEqual(spyOpen.callCount, 0);
+          assert.strictEqual(stubBeacon.callCount, 0);
+          assert.strictEqual(stubOpen.callCount, 0);
 
           done();
         });
       });
     });
+  });
+});
+
+describe('when configuring via environment', () => {
+  const envSource = window as any;
+  it('should use url defined in env', () => {
+    envSource.OTEL_EXPORTER_OTLP_ENDPOINT = 'http://foo.bar';
+    const collectorExporter = new CollectorMetricExporter();
+    assert.strictEqual(
+      collectorExporter.url,
+      envSource.OTEL_EXPORTER_OTLP_ENDPOINT
+    );
+    envSource.OTEL_EXPORTER_OTLP_ENDPOINT = '';
+  });
+  it('should override global exporter url with signal url defined in env', () => {
+    envSource.OTEL_EXPORTER_OTLP_ENDPOINT = 'http://foo.bar';
+    envSource.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT = 'http://foo.metrics';
+    const collectorExporter = new CollectorMetricExporter();
+    assert.strictEqual(
+      collectorExporter.url,
+      envSource.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+    );
+    envSource.OTEL_EXPORTER_OTLP_ENDPOINT = '';
+    envSource.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT = '';
+  });
+  it('should use headers defined via env', () => {
+    envSource.OTEL_EXPORTER_OTLP_HEADERS = 'foo=bar';
+    const collectorExporter = new CollectorMetricExporter({ headers: {} });
+    // @ts-expect-error access internal property for testing
+    assert.strictEqual(collectorExporter._headers.foo, 'bar');
+    envSource.OTEL_EXPORTER_OTLP_HEADERS = '';
+  });
+  it('should override global headers config with signal headers defined via env', () => {
+    envSource.OTEL_EXPORTER_OTLP_HEADERS = 'foo=bar,bar=foo';
+    envSource.OTEL_EXPORTER_OTLP_METRICS_HEADERS = 'foo=boo';
+    const collectorExporter = new CollectorMetricExporter({ headers: {} });
+    // @ts-expect-error access internal property for testing
+    assert.strictEqual(collectorExporter._headers.foo, 'boo');
+    // @ts-expect-error access internal property for testing
+    assert.strictEqual(collectorExporter._headers.bar, 'foo');
+    envSource.OTEL_EXPORTER_OTLP_METRICS_HEADERS = '';
+    envSource.OTEL_EXPORTER_OTLP_HEADERS = '';
   });
 });

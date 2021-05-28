@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import { ExportResultCode, NoopLogger } from '@opentelemetry/core';
+import { ExportResultCode } from '@opentelemetry/core';
 import { ReadableSpan } from '@opentelemetry/tracing';
 import * as assert from 'assert';
 import * as sinon from 'sinon';
@@ -61,6 +61,10 @@ describe('CollectorTraceExporter - common', () => {
   let collectorExporter: CollectorTraceExporter;
   let collectorExporterConfig: CollectorExporterConfig;
 
+  afterEach(() => {
+    sinon.restore();
+  });
+
   describe('constructor', () => {
     let onInitSpy: any;
 
@@ -68,16 +72,11 @@ describe('CollectorTraceExporter - common', () => {
       onInitSpy = sinon.stub(CollectorTraceExporter.prototype, 'onInit');
       collectorExporterConfig = {
         hostname: 'foo',
-        logger: new NoopLogger(),
         serviceName: 'bar',
         attributes: {},
         url: 'http://foo.bar.com',
       };
       collectorExporter = new CollectorTraceExporter(collectorExporterConfig);
-    });
-
-    afterEach(() => {
-      onInitSpy.restore();
     });
 
     it('should create an instance', () => {
@@ -100,10 +99,6 @@ describe('CollectorTraceExporter - common', () => {
       it('should set url', () => {
         assert.strictEqual(collectorExporter.url, 'http://foo.bar.com');
       });
-
-      it('should set logger', () => {
-        assert.ok(collectorExporter.logger === collectorExporterConfig.logger);
-      });
     });
 
     describe('when config is missing certain params', () => {
@@ -114,10 +109,6 @@ describe('CollectorTraceExporter - common', () => {
       it('should set default serviceName', () => {
         assert.strictEqual(collectorExporter.serviceName, 'collector-exporter');
       });
-
-      it('should set default logger', () => {
-        assert.ok(collectorExporter.logger instanceof NoopLogger);
-      });
     });
   });
 
@@ -126,9 +117,6 @@ describe('CollectorTraceExporter - common', () => {
     beforeEach(() => {
       spySend = sinon.stub(CollectorTraceExporter.prototype, 'send');
       collectorExporter = new CollectorTraceExporter(collectorExporterConfig);
-    });
-    afterEach(() => {
-      spySend.restore();
     });
 
     it('should export spans as collectorTypes.Spans', done => {
@@ -233,15 +221,11 @@ describe('CollectorTraceExporter - common', () => {
       );
       collectorExporterConfig = {
         hostname: 'foo',
-        logger: new NoopLogger(),
         serviceName: 'bar',
         attributes: {},
         url: 'http://foo.bar.com',
       };
       collectorExporter = new CollectorTraceExporter(collectorExporterConfig);
-    });
-    afterEach(() => {
-      onShutdownSpy.restore();
     });
 
     it('should call onShutdown', async () => {

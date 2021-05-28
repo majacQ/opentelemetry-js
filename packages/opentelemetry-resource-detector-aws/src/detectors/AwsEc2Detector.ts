@@ -17,10 +17,13 @@
 import {
   Detector,
   Resource,
-  CLOUD_RESOURCE,
-  HOST_RESOURCE,
-  ResourceDetectionConfigWithLogger,
+  ResourceDetectionConfig,
 } from '@opentelemetry/resources';
+import {
+  CloudProviderValues,
+  CloudPlatformValues,
+  ResourceAttributes,
+} from '@opentelemetry/semantic-conventions';
 import * as http from 'http';
 
 /**
@@ -50,9 +53,9 @@ class AwsEc2Detector implements Detector {
    * empty {@link Resource} if the connection or parsing of the identity
    * document fails.
    *
-   * @param config (unused) The resource detection config with a required logger
+   * @param config (unused) The resource detection config
    */
-  async detect(_config: ResourceDetectionConfigWithLogger): Promise<Resource> {
+  async detect(_config?: ResourceDetectionConfig): Promise<Resource> {
     const token = await this._fetchToken();
     const {
       accountId,
@@ -64,13 +67,14 @@ class AwsEc2Detector implements Detector {
     const hostname = await this._fetchHost(token);
 
     return new Resource({
-      [CLOUD_RESOURCE.PROVIDER]: 'aws',
-      [CLOUD_RESOURCE.ACCOUNT_ID]: accountId,
-      [CLOUD_RESOURCE.REGION]: region,
-      [CLOUD_RESOURCE.ZONE]: availabilityZone,
-      [HOST_RESOURCE.ID]: instanceId,
-      [HOST_RESOURCE.TYPE]: instanceType,
-      [HOST_RESOURCE.NAME]: hostname,
+      [ResourceAttributes.CLOUD_PROVIDER]: CloudProviderValues.AWS,
+      [ResourceAttributes.CLOUD_PLATFORM]: CloudPlatformValues.AWS_EC2,
+      [ResourceAttributes.CLOUD_ACCOUNT_ID]: accountId,
+      [ResourceAttributes.CLOUD_REGION]: region,
+      [ResourceAttributes.CLOUD_AVAILABILITY_ZONE]: availabilityZone,
+      [ResourceAttributes.HOST_ID]: instanceId,
+      [ResourceAttributes.HOST_TYPE]: instanceType,
+      [ResourceAttributes.HOST_NAME]: hostname,
     });
   }
 

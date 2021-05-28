@@ -18,10 +18,10 @@ import * as api from '@opentelemetry/api';
 import {
   hrTimeDuration,
   hrTimeToMicroseconds,
-  NoopLogger,
   VERSION,
 } from '@opentelemetry/core';
-import { Resource, TELEMETRY_SDK_RESOURCE } from '@opentelemetry/resources';
+import { Resource } from '@opentelemetry/resources';
+import { ResourceAttributes } from '@opentelemetry/semantic-conventions';
 import { BasicTracerProvider, Span } from '@opentelemetry/tracing';
 import * as assert from 'assert';
 import {
@@ -32,12 +32,10 @@ import {
   _toZipkinTags,
 } from '../../src/transform';
 import * as zipkinTypes from '../../src/types';
-const logger = new NoopLogger();
-const tracer = new BasicTracerProvider({
-  logger,
-}).getTracer('default');
+const tracer = new BasicTracerProvider().getTracer('default');
 
-const language = tracer.resource.attributes[TELEMETRY_SDK_RESOURCE.LANGUAGE];
+const language =
+  tracer.resource.attributes[ResourceAttributes.TELEMETRY_SDK_LANGUAGE];
 
 const parentId = '5c1c63257de34c67';
 const spanContext: api.SpanContext = {
@@ -87,7 +85,7 @@ describe('transform', () => {
         duration: hrTimeToMicroseconds(
           hrTimeDuration(span.startTime, span.endTime)
         ),
-        id: span.spanContext.spanId,
+        id: span.spanContext().spanId,
         localEndpoint: {
           serviceName: 'my-service',
         },
@@ -102,7 +100,7 @@ describe('transform', () => {
           'telemetry.sdk.version': VERSION,
         },
         timestamp: hrTimeToMicroseconds(span.startTime),
-        traceId: span.spanContext.traceId,
+        traceId: span.spanContext().traceId,
       });
     });
     it("should skip parentSpanId if doesn't exist", () => {
@@ -127,7 +125,7 @@ describe('transform', () => {
         duration: hrTimeToMicroseconds(
           hrTimeDuration(span.startTime, span.endTime)
         ),
-        id: span.spanContext.spanId,
+        id: span.spanContext().spanId,
         localEndpoint: {
           serviceName: 'my-service',
         },
@@ -140,7 +138,7 @@ describe('transform', () => {
           'telemetry.sdk.version': VERSION,
         },
         timestamp: hrTimeToMicroseconds(span.startTime),
-        traceId: span.spanContext.traceId,
+        traceId: span.spanContext().traceId,
       });
     });
     // SpanKind mapping tests
@@ -175,7 +173,7 @@ describe('transform', () => {
           duration: hrTimeToMicroseconds(
             hrTimeDuration(span.startTime, span.endTime)
           ),
-          id: span.spanContext.spanId,
+          id: span.spanContext().spanId,
           localEndpoint: {
             serviceName: 'my-service',
           },
@@ -188,7 +186,7 @@ describe('transform', () => {
             'telemetry.sdk.version': VERSION,
           },
           timestamp: hrTimeToMicroseconds(span.startTime),
-          traceId: span.spanContext.traceId,
+          traceId: span.spanContext().traceId,
         });
       })
     );
@@ -225,7 +223,7 @@ describe('transform', () => {
         version: '1',
       });
     });
-    it('should map OpenTelemetry Status.code to a Zipkin tag', () => {
+    it('should map OpenTelemetry SpanStatus.code to a Zipkin tag', () => {
       const span = new Span(
         tracer,
         api.ROOT_CONTEXT,
@@ -234,8 +232,8 @@ describe('transform', () => {
         api.SpanKind.SERVER,
         parentId
       );
-      const status: api.Status = {
-        code: api.StatusCode.ERROR,
+      const status: api.SpanStatus = {
+        code: api.SpanStatusCode.ERROR,
       };
       span.setStatus(status);
       span.setAttributes({
@@ -256,7 +254,7 @@ describe('transform', () => {
         [statusCodeTagName]: 'ERROR',
       });
     });
-    it('should map OpenTelemetry Status.message to a Zipkin tag', () => {
+    it('should map OpenTelemetry SpanStatus.message to a Zipkin tag', () => {
       const span = new Span(
         tracer,
         api.ROOT_CONTEXT,
@@ -265,8 +263,8 @@ describe('transform', () => {
         api.SpanKind.SERVER,
         parentId
       );
-      const status: api.Status = {
-        code: api.StatusCode.ERROR,
+      const status: api.SpanStatus = {
+        code: api.SpanStatusCode.ERROR,
         message: 'my-message',
       };
       span.setStatus(status);

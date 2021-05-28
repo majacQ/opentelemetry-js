@@ -15,7 +15,7 @@
  */
 
 import { collectorTypes } from '@opentelemetry/exporter-collector';
-import * as grpc from 'grpc';
+import * as grpc from '@grpc/grpc-js';
 
 /**
  * Queue item to be used to save temporary spans/metrics in case the GRPC service
@@ -33,7 +33,7 @@ export interface GRPCQueueItem<ExportedItem> {
 export interface ServiceClient extends grpc.Client {
   export: (
     request: any,
-    metadata: grpc.Metadata | undefined,
+    metadata: grpc.Metadata,
     callback: Function
   ) => {};
 }

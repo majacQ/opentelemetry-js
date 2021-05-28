@@ -24,15 +24,14 @@ import {
   timeInputToHrTime,
 } from '@opentelemetry/core';
 import { Resource } from '@opentelemetry/resources';
-import {
-  ExceptionAttribute,
-  ExceptionEventName,
-} from '@opentelemetry/semantic-conventions';
+import { SemanticAttributes } from '@opentelemetry/semantic-conventions';
 import { ReadableSpan } from './export/ReadableSpan';
+import { TimedEvent } from './TimedEvent';
 import { Tracer } from './Tracer';
 import { SpanProcessor } from './SpanProcessor';
-import { TraceParams } from './types';
-import { AttributeValue, Context } from '@opentelemetry/api';
+import { SpanLimits } from './types';
+import { SpanAttributeValue, Context } from '@opentelemetry/api';
+import { ExceptionEventName } from './enums';
 
 /**
  * This class represents a span.
@@ -40,25 +39,24 @@ import { AttributeValue, Context } from '@opentelemetry/api';
 export class Span implements api.Span, ReadableSpan {
   // Below properties are included to implement ReadableSpan for export
   // purposes but are not intended to be written-to directly.
-  readonly spanContext: api.SpanContext;
+  private readonly _spanContext: api.SpanContext;
   readonly kind: api.SpanKind;
   readonly parentSpanId?: string;
-  readonly attributes: api.Attributes = {};
+  readonly attributes: api.SpanAttributes = {};
   readonly links: api.Link[] = [];
-  readonly events: api.TimedEvent[] = [];
+  readonly events: TimedEvent[] = [];
   readonly startTime: api.HrTime;
   readonly resource: Resource;
   readonly instrumentationLibrary: InstrumentationLibrary;
   name: string;
-  status: api.Status = {
-    code: api.StatusCode.UNSET,
+  status: api.SpanStatus = {
+    code: api.SpanStatusCode.UNSET,
   };
   endTime: api.HrTime = [0, 0];
   private _ended = false;
   private _duration: api.HrTime = [-1, -1];
-  private readonly _logger: api.Logger;
   private readonly _spanProcessor: SpanProcessor;
-  private readonly _traceParams: TraceParams;
+  private readonly _spanLimits: SpanLimits;
 
   /** Constructs a new Span instance. */
   constructor(
@@ -72,38 +70,37 @@ export class Span implements api.Span, ReadableSpan {
     startTime: api.TimeInput = hrTime()
   ) {
     this.name = spanName;
-    this.spanContext = spanContext;
+    this._spanContext = spanContext;
     this.parentSpanId = parentSpanId;
     this.kind = kind;
     this.links = links;
     this.startTime = timeInputToHrTime(startTime);
     this.resource = parentTracer.resource;
     this.instrumentationLibrary = parentTracer.instrumentationLibrary;
-    this._logger = parentTracer.logger;
-    this._traceParams = parentTracer.getActiveTraceParams();
+    this._spanLimits = parentTracer.getSpanLimits();
     this._spanProcessor = parentTracer.getActiveSpanProcessor();
     this._spanProcessor.onStart(this, context);
   }
 
-  context(): api.SpanContext {
-    return this.spanContext;
+  spanContext(): api.SpanContext {
+    return this._spanContext;
   }
 
-  setAttribute(key: string, value?: AttributeValue): this;
+  setAttribute(key: string, value?: SpanAttributeValue): this;
   setAttribute(key: string, value: unknown): this {
     if (value == null || this._isSpanEnded()) return this;
     if (key.length === 0) {
-      this._logger.warn(`Invalid attribute key: ${key}`);
+      api.diag.warn(`Invalid attribute key: ${key}`);
       return this;
     }
     if (!isAttributeValue(value)) {
-      this._logger.warn(`Invalid attribute value set for key: ${key}`);
+      api.diag.warn(`Invalid attribute value set for key: ${key}`);
       return this;
     }
 
     if (
       Object.keys(this.attributes).length >=
-        this._traceParams.numberOfAttributesPerSpan! &&
+        this._spanLimits.attributeCountLimit! &&
       !Object.prototype.hasOwnProperty.call(this.attributes, key)
     ) {
       return this;
@@ -112,7 +109,7 @@ export class Span implements api.Span, ReadableSpan {
     return this;
   }
 
-  setAttributes(attributes: api.Attributes): this {
+  setAttributes(attributes: api.SpanAttributes): this {
     for (const [k, v] of Object.entries(attributes)) {
       this.setAttribute(k, v);
     }
@@ -128,12 +125,12 @@ export class Span implements api.Span, ReadableSpan {
    */
   addEvent(
     name: string,
-    attributesOrStartTime?: api.Attributes | api.TimeInput,
+    attributesOrStartTime?: api.SpanAttributes | api.TimeInput,
     startTime?: api.TimeInput
   ): this {
     if (this._isSpanEnded()) return this;
-    if (this.events.length >= this._traceParams.numberOfEventsPerSpan!) {
-      this._logger.warn('Dropping extra events.');
+    if (this.events.length >= this._spanLimits.eventCountLimit!) {
+      api.diag.warn('Dropping extra events.');
       this.events.shift();
     }
     if (isTimeInput(attributesOrStartTime)) {
@@ -147,13 +144,13 @@ export class Span implements api.Span, ReadableSpan {
     }
     this.events.push({
       name,
-      attributes: attributesOrStartTime as api.Attributes,
+      attributes: attributesOrStartTime as api.SpanAttributes,
       time: timeInputToHrTime(startTime),
     });
     return this;
   }
 
-  setStatus(status: api.Status): this {
+  setStatus(status: api.SpanStatus): this {
     if (this._isSpanEnded()) return this;
     this.status = status;
     return this;
@@ -167,7 +164,7 @@ export class Span implements api.Span, ReadableSpan {
 
   end(endTime: api.TimeInput = hrTime()): void {
     if (this._isSpanEnded()) {
-      this._logger.error('You can only call end() on a span once.');
+      api.diag.error('You can only call end() on a span once.');
       return;
     }
     this._ended = true;
@@ -175,7 +172,7 @@ export class Span implements api.Span, ReadableSpan {
 
     this._duration = hrTimeDuration(this.startTime, this.endTime);
     if (this._duration[0] < 0) {
-      this._logger.warn(
+      api.diag.warn(
         'Inconsistent start and end time, startTime > endTime',
         this.startTime,
         this.endTime
@@ -190,31 +187,33 @@ export class Span implements api.Span, ReadableSpan {
   }
 
   recordException(exception: api.Exception, time: api.TimeInput = hrTime()) {
-    const attributes: api.Attributes = {};
+    const attributes: api.SpanAttributes = {};
     if (typeof exception === 'string') {
-      attributes[ExceptionAttribute.MESSAGE] = exception;
+      attributes[SemanticAttributes.EXCEPTION_MESSAGE] = exception;
     } else if (exception) {
       if (exception.code) {
-        attributes[ExceptionAttribute.TYPE] = exception.code;
+        attributes[
+          SemanticAttributes.EXCEPTION_TYPE
+        ] = exception.code.toString();
       } else if (exception.name) {
-        attributes[ExceptionAttribute.TYPE] = exception.name;
+        attributes[SemanticAttributes.EXCEPTION_TYPE] = exception.name;
       }
       if (exception.message) {
-        attributes[ExceptionAttribute.MESSAGE] = exception.message;
+        attributes[SemanticAttributes.EXCEPTION_MESSAGE] = exception.message;
       }
       if (exception.stack) {
-        attributes[ExceptionAttribute.STACKTRACE] = exception.stack;
+        attributes[SemanticAttributes.EXCEPTION_STACKTRACE] = exception.stack;
       }
     }
 
     // these are minimum requirements from spec
     if (
-      attributes[ExceptionAttribute.TYPE] ||
-      attributes[ExceptionAttribute.MESSAGE]
+      attributes[SemanticAttributes.EXCEPTION_TYPE] ||
+      attributes[SemanticAttributes.EXCEPTION_MESSAGE]
     ) {
-      this.addEvent(ExceptionEventName, attributes as api.Attributes, time);
+      this.addEvent(ExceptionEventName, attributes as api.SpanAttributes, time);
     } else {
-      this._logger.warn(`Failed to record an exception ${exception}`);
+      api.diag.warn(`Failed to record an exception ${exception}`);
     }
   }
 
@@ -228,10 +227,10 @@ export class Span implements api.Span, ReadableSpan {
 
   private _isSpanEnded(): boolean {
     if (this._ended) {
-      this._logger.warn(
+      api.diag.warn(
         'Can not execute the operation on ended Span {traceId: %s, spanId: %s}',
-        this.spanContext.traceId,
-        this.spanContext.spanId
+        this._spanContext.traceId,
+        this._spanContext.spanId
       );
     }
     return this._ended;

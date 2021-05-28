@@ -14,22 +14,20 @@
  * limitations under the License.
  */
 import {
-  StatusCode,
+  SpanStatusCode,
   context,
   propagation,
   Span as ISpan,
-  SpanKind,
-  getActiveSpan,
+  SpanKind, trace,
 } from '@opentelemetry/api';
-import { NoopLogger } from '@opentelemetry/core';
 import { NodeTracerProvider } from '@opentelemetry/node';
 import {
   InMemorySpanExporter,
   SimpleSpanProcessor,
 } from '@opentelemetry/tracing';
 import {
-  HttpAttribute,
-  GeneralAttribute,
+  NetTransportValues,
+  SemanticAttributes,
 } from '@opentelemetry/semantic-conventions';
 import * as assert from 'assert';
 import * as nock from 'nock';
@@ -39,13 +37,13 @@ import { HttpInstrumentationConfig } from '../../src/types';
 import { assertSpan } from '../utils/assertSpan';
 import { DummyPropagation } from '../utils/DummyPropagation';
 import { httpRequest } from '../utils/httpRequest';
-import { ContextManager } from '@opentelemetry/context-base';
+import { ContextManager } from '@opentelemetry/api';
 import { AsyncHooksContextManager } from '@opentelemetry/context-async-hooks';
 import type { ClientRequest, IncomingMessage, ServerResponse } from 'http';
 import { isWrapped } from '@opentelemetry/instrumentation';
+import { getRPCMetadata, RPCType } from '@opentelemetry/core';
 
-const logger = new NoopLogger();
-const instrumentation = new HttpInstrumentation({ logger });
+const instrumentation = new HttpInstrumentation();
 instrumentation.enable();
 instrumentation.disable();
 
@@ -61,12 +59,9 @@ const hostname = 'localhost';
 const pathname = '/test';
 const serverName = 'my.server.name';
 const memoryExporter = new InMemorySpanExporter();
-const provider = new NodeTracerProvider({
-  logger,
-});
+const provider = new NodeTracerProvider();
 provider.addSpanProcessor(new SimpleSpanProcessor(memoryExporter));
 instrumentation.setTracerProvider(provider);
-propagation.setGlobalPropagator(new DummyPropagation());
 
 function doNock(
   hostname: string,
@@ -102,6 +97,14 @@ export const responseHookFunction = (
 
 describe('HttpInstrumentation', () => {
   let contextManager: ContextManager;
+
+  before(() => {
+    propagation.setGlobalPropagator(new DummyPropagation());
+  });
+
+  after(() => {
+    propagation.disable();
+  });
 
   beforeEach(() => {
     contextManager = new AsyncHooksContextManager().enable();
@@ -168,15 +171,16 @@ describe('HttpInstrumentation', () => {
         assertSpan(incomingSpan, SpanKind.SERVER, validations);
         assertSpan(outgoingSpan, SpanKind.CLIENT, validations);
         assert.strictEqual(
-          incomingSpan.attributes[GeneralAttribute.NET_HOST_PORT],
+          incomingSpan.attributes[SemanticAttributes.NET_HOST_PORT],
           serverPort
         );
         assert.strictEqual(
-          outgoingSpan.attributes[GeneralAttribute.NET_PEER_PORT],
+          outgoingSpan.attributes[SemanticAttributes.NET_PEER_PORT],
           serverPort
         );
       });
     });
+
     describe('with good instrumentation options', () => {
       beforeEach(() => {
         memoryExporter.reset();
@@ -201,6 +205,9 @@ describe('HttpInstrumentation', () => {
         });
         instrumentation.enable();
         server = http.createServer((request, response) => {
+          if (request.url?.includes('/ignored')) {
+            provider.getTracer('test').startSpan('some-span').end();
+          }
           response.end('Test Server Response');
         });
 
@@ -241,25 +248,28 @@ describe('HttpInstrumentation', () => {
 
         assert.strictEqual(spans.length, 2);
         assert.strictEqual(
-          incomingSpan.attributes[HttpAttribute.HTTP_CLIENT_IP],
+          incomingSpan.attributes[SemanticAttributes.HTTP_CLIENT_IP],
           '<client>'
         );
         assert.strictEqual(
-          incomingSpan.attributes[GeneralAttribute.NET_HOST_PORT],
+          incomingSpan.attributes[SemanticAttributes.NET_HOST_PORT],
           serverPort
         );
         assert.strictEqual(
-          outgoingSpan.attributes[GeneralAttribute.NET_PEER_PORT],
+          outgoingSpan.attributes[SemanticAttributes.NET_PEER_PORT],
           serverPort
         );
         [
           { span: incomingSpan, kind: SpanKind.SERVER },
           { span: outgoingSpan, kind: SpanKind.CLIENT },
         ].forEach(({ span, kind }) => {
-          assert.strictEqual(span.attributes[HttpAttribute.HTTP_FLAVOR], '1.1');
           assert.strictEqual(
-            span.attributes[GeneralAttribute.NET_TRANSPORT],
-            GeneralAttribute.IP_TCP
+            span.attributes[SemanticAttributes.HTTP_FLAVOR],
+            '1.1'
+          );
+          assert.strictEqual(
+            span.attributes[SemanticAttributes.NET_TRANSPORT],
+            NetTransportValues.IP_TCP
           );
           assertSpan(span, kind, validations);
         });
@@ -321,7 +331,7 @@ describe('HttpInstrumentation', () => {
         doNock(hostname, testPath, 200, 'Ok');
         const name = 'TestRootSpan';
         const span = provider.getTracer('default').startSpan(name);
-        return provider.getTracer('default').withSpan(span, async () => {
+        return context.with(trace.setSpan(context.active(), span), async () => {
           const result = await httpRequest.get(
             `${protocol}://${hostname}${testPath}`
           );
@@ -342,13 +352,13 @@ describe('HttpInstrumentation', () => {
           assert.strictEqual(spans.length, 2);
           assert.strictEqual(reqSpan.name, 'HTTP GET');
           assert.strictEqual(
-            localSpan.spanContext.traceId,
-            reqSpan.spanContext.traceId
+            localSpan.spanContext().traceId,
+            reqSpan.spanContext().traceId
           );
           assertSpan(reqSpan, SpanKind.CLIENT, validations);
           assert.notStrictEqual(
-            localSpan.spanContext.spanId,
-            reqSpan.spanContext.spanId
+            localSpan.spanContext().spanId,
+            reqSpan.spanContext().spanId
           );
         });
       });
@@ -364,7 +374,7 @@ describe('HttpInstrumentation', () => {
           );
           const name = 'TestRootSpan';
           const span = provider.getTracer('default').startSpan(name);
-          return provider.getTracer('default').withSpan(span, async () => {
+          return context.with(trace.setSpan(context.active(), span), async () => {
             const result = await httpRequest.get(
               `${protocol}://${hostname}${testPath}`
             );
@@ -385,13 +395,13 @@ describe('HttpInstrumentation', () => {
             assert.strictEqual(spans.length, 2);
             assert.strictEqual(reqSpan.name, 'HTTP GET');
             assert.strictEqual(
-              localSpan.spanContext.traceId,
-              reqSpan.spanContext.traceId
+              localSpan.spanContext().traceId,
+              reqSpan.spanContext().traceId
             );
             assertSpan(reqSpan, SpanKind.CLIENT, validations);
             assert.notStrictEqual(
-              localSpan.spanContext.spanId,
-              reqSpan.spanContext.spanId
+              localSpan.spanContext().spanId,
+              reqSpan.spanContext().spanId
             );
           });
         });
@@ -403,14 +413,14 @@ describe('HttpInstrumentation', () => {
         doNock(hostname, testPath, 200, 'Ok', num);
         const name = 'TestRootSpan';
         const span = provider.getTracer('default').startSpan(name);
-        await provider.getTracer('default').withSpan(span, async () => {
+        await context.with(trace.setSpan(context.active(), span), async () => {
           for (let i = 0; i < num; i++) {
             await httpRequest.get(`${protocol}://${hostname}${testPath}`);
             const spans = memoryExporter.getFinishedSpans();
             assert.strictEqual(spans[i].name, 'HTTP GET');
             assert.strictEqual(
-              span.context().traceId,
-              spans[i].spanContext.traceId
+              span.spanContext().traceId,
+              spans[i].spanContext().traceId
             );
           }
           span.end();
@@ -581,7 +591,7 @@ describe('HttpInstrumentation', () => {
           const spans = memoryExporter.getFinishedSpans();
           const [span] = spans;
           assert.strictEqual(spans.length, 1);
-          assert.strictEqual(span.status.code, StatusCode.ERROR);
+          assert.strictEqual(span.status.code, SpanStatusCode.ERROR);
           assert.ok(Object.keys(span.attributes).length >= 6);
         }
       });
@@ -619,7 +629,7 @@ describe('HttpInstrumentation', () => {
           const spans = memoryExporter.getFinishedSpans();
           const [span] = spans;
           assert.strictEqual(spans.length, 1);
-          assert.strictEqual(span.status.code, StatusCode.ERROR);
+          assert.strictEqual(span.status.code, SpanStatusCode.ERROR);
           assert.ok(Object.keys(span.attributes).length > 7);
         }
       });
@@ -650,10 +660,10 @@ describe('HttpInstrumentation', () => {
             assert.strictEqual(spans.length, 1);
             assert.ok(Object.keys(span.attributes).length > 6);
             assert.strictEqual(
-              span.attributes[HttpAttribute.HTTP_STATUS_CODE],
+              span.attributes[SemanticAttributes.HTTP_STATUS_CODE],
               404
             );
-            assert.strictEqual(span.status.code, StatusCode.ERROR);
+            assert.strictEqual(span.status.code, SpanStatusCode.ERROR);
             done();
           });
         });
@@ -695,10 +705,18 @@ describe('HttpInstrumentation', () => {
       });
 
       it('should not set span as active in context for outgoing request', done => {
-        assert.deepStrictEqual(getActiveSpan(context.active()), undefined);
+        assert.deepStrictEqual(trace.getSpan(context.active()), undefined);
         http.get(`${protocol}://${hostname}:${serverPort}/test`, res => {
-          assert.deepStrictEqual(getActiveSpan(context.active()), undefined);
-          done();
+          assert.deepStrictEqual(trace.getSpan(context.active()), undefined);
+
+          res.on('data', () => {
+            assert.deepStrictEqual(trace.getSpan(context.active()), undefined);
+          });
+
+          res.on('end', () => {
+            assert.deepStrictEqual(trace.getSpan(context.active()), undefined);
+            done();
+          });
         });
       });
     });
@@ -794,7 +812,7 @@ describe('HttpInstrumentation', () => {
         const span = tracer.startSpan('parentSpan', {
           kind: SpanKind.INTERNAL,
         });
-        tracer.withSpan(span, () => {
+        context.with(trace.setSpan(context.active(), span), () => {
           httpRequest
             .get(`${protocol}://${hostname}:${serverPort}${testPath}`)
             .then(result => {
@@ -821,6 +839,33 @@ describe('HttpInstrumentation', () => {
             })
             .catch(done);
         });
+      });
+    });
+    describe('rpc metadata', () => {
+      beforeEach(() => {
+        memoryExporter.reset();
+        instrumentation.setConfig({ requireParentforOutgoingSpans: true });
+        instrumentation.enable();
+      });
+
+      afterEach(() => {
+        server.close();
+        instrumentation.disable();
+      });
+
+      it('should set rpc metadata for incoming http request', async () => {
+        server = http.createServer((request, response) => {
+          const rpcMemadata = getRPCMetadata(context.active());
+          assert(typeof rpcMemadata !== 'undefined');
+          assert(rpcMemadata.type === RPCType.HTTP);
+          assert(rpcMemadata.span.setAttribute('key', 'value'));
+          response.end('Test Server Response');
+        });
+        await new Promise<void>(resolve => server.listen(serverPort, resolve));
+        await httpRequest.get(`${protocol}://${hostname}:${serverPort}`);
+        const spans = memoryExporter.getFinishedSpans();
+        assert.strictEqual(spans.length, 1);
+        assert.strictEqual(spans[0].attributes.key, 'value');
       });
     });
   });

@@ -14,8 +14,6 @@
  * limitations under the License.
  */
 
-import { NoopTracerProvider, NOOP_TRACER } from '@opentelemetry/api';
-import { NoopLogger } from '@opentelemetry/core';
 import * as assert from 'assert';
 import * as fs from 'fs';
 import type { AddressInfo } from 'net';
@@ -24,21 +22,29 @@ import * as sinon from 'sinon';
 import { HttpInstrumentation } from '../../src';
 import { isWrapped } from '@opentelemetry/instrumentation';
 
-const logger = new NoopLogger();
-const instrumentation = new HttpInstrumentation({ logger });
+const instrumentation = new HttpInstrumentation();
 instrumentation.enable();
 instrumentation.disable();
 
 import * as https from 'https';
 import { httpsRequest } from '../utils/httpsRequest';
+import { INVALID_SPAN_CONTEXT, trace, TracerProvider } from '@opentelemetry/api';
 
 describe('HttpsInstrumentation', () => {
   let server: https.Server;
   let serverPort = 0;
 
   describe('disable()', () => {
-    const provider = new NoopTracerProvider();
+    let provider: TracerProvider;
+    let startSpanStub: sinon.SinonStub;
+  
     before(() => {
+      provider = {
+        getTracer: () => {
+          startSpanStub = sinon.stub().returns(trace.wrapSpanContext(INVALID_SPAN_CONTEXT));
+          return { startSpan: startSpanStub } as any;
+        }
+      };
       nock.cleanAll();
       nock.enableNetConnect();
 
@@ -62,11 +68,6 @@ describe('HttpsInstrumentation', () => {
       });
     });
 
-    beforeEach(() => {
-      NOOP_TRACER.startSpan = sinon.spy();
-      NOOP_TRACER.withSpan = sinon.spy();
-    });
-
     afterEach(() => {
       sinon.restore();
     });
@@ -81,17 +82,9 @@ describe('HttpsInstrumentation', () => {
 
         const options = { host: 'localhost', path: testPath, port: serverPort };
 
-        await httpsRequest.get(options).then(result => {
-          assert.strictEqual(
-            (NOOP_TRACER.startSpan as sinon.SinonSpy).called,
-            false
-          );
-
+        await httpsRequest.get(options).then(() => {
+          sinon.assert.notCalled(startSpanStub);
           assert.strictEqual(isWrapped(https.Server.prototype.emit), false);
-          assert.strictEqual(
-            (NOOP_TRACER.withSpan as sinon.SinonSpy).called,
-            false
-          );
         });
       });
     });

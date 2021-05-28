@@ -15,27 +15,30 @@
  */
 
 import * as protoLoader from '@grpc/proto-loader';
-import * as grpc from 'grpc';
-import * as path from 'path';
-import * as fs from 'fs';
-
-import * as assert from 'assert';
-import * as sinon from 'sinon';
+import {
+  Counter,
+  ValueObserver,
+  ValueRecorder,
+} from '@opentelemetry/api-metrics';
+import { diag } from '@opentelemetry/api';
 import { collectorTypes } from '@opentelemetry/exporter-collector';
+import * as metrics from '@opentelemetry/metrics';
+import * as assert from 'assert';
+import * as fs from 'fs';
+import * as grpc from '@grpc/grpc-js';
+import * as path from 'path';
+import * as sinon from 'sinon';
 import { CollectorMetricExporter } from '../src';
 import {
-  mockCounter,
-  mockObserver,
   ensureExportedCounterIsCorrect,
   ensureExportedObserverIsCorrect,
+  ensureExportedValueRecorderIsCorrect,
   ensureMetadataIsCorrect,
   ensureResourceIsCorrect,
-  ensureExportedValueRecorderIsCorrect,
+  mockCounter,
+  mockObserver,
   mockValueRecorder,
 } from './helper';
-import { ConsoleLogger, LogLevel } from '@opentelemetry/core';
-import * as api from '@opentelemetry/api';
-import * as metrics from '@opentelemetry/metrics';
 
 const metricsServiceProtoPath =
   'opentelemetry/proto/collector/metrics/v1/metrics_service.proto';
@@ -106,9 +109,10 @@ const testCollectorMetricExporter = (params: TestParams) =>
                 ]
               )
             : grpc.ServerCredentials.createInsecure();
-          server.bind(address, credentials);
-          server.start();
-          done();
+          server.bindAsync(address, credentials, () => {
+            server.start();
+            done();
+          });
         });
     });
 
@@ -125,7 +129,7 @@ const testCollectorMetricExporter = (params: TestParams) =>
           )
         : undefined;
       collectorExporter = new CollectorMetricExporter({
-        url: address,
+        url: 'grpcs://' + address,
         credentials,
         serviceName: 'basic-service',
         metadata: params.metadata,
@@ -136,14 +140,14 @@ const testCollectorMetricExporter = (params: TestParams) =>
       });
       metrics = [];
       const counter: metrics.Metric<metrics.BoundCounter> &
-        api.Counter = mockCounter();
+        Counter = mockCounter();
       const observer: metrics.Metric<metrics.BoundObserver> &
-        api.ValueObserver = mockObserver(observerResult => {
+        ValueObserver = mockObserver(observerResult => {
         observerResult.observe(3, {});
         observerResult.observe(6, {});
       });
       const recorder: metrics.Metric<metrics.BoundValueRecorder> &
-        api.ValueRecorder = mockValueRecorder();
+        ValueRecorder = mockValueRecorder();
 
       counter.add(1);
       recorder.record(7);
@@ -157,22 +161,34 @@ const testCollectorMetricExporter = (params: TestParams) =>
     afterEach(() => {
       exportedData = undefined;
       reqMetadata = undefined;
+      sinon.restore();
     });
 
     describe('instance', () => {
       it('should warn about headers', () => {
-        const logger = new ConsoleLogger(LogLevel.DEBUG);
-        const spyLoggerWarn = sinon.stub(logger, 'warn');
+        // Need to stub/spy on the underlying logger as the 'diag' instance is global
+        const spyLoggerWarn = sinon.stub(diag, 'warn');
         collectorExporter = new CollectorMetricExporter({
-          logger,
           serviceName: 'basic-service',
-          url: address,
+          url: `http://${address}`,
           headers: {
             foo: 'bar',
           },
         });
         const args = spyLoggerWarn.args[0];
         assert.strictEqual(args[0], 'Headers cannot be set when using grpc');
+      });
+      it('should warn about path in url', () => {
+        const spyLoggerWarn = sinon.stub(diag, 'warn');
+        collectorExporter = new CollectorMetricExporter({
+          serviceName: 'basic-service',
+          url: `http://${address}/v1/metrics`
+        });
+        const args = spyLoggerWarn.args[0];
+        assert.strictEqual(
+          args[0],
+          'URL path should not be set when using grpc, the path part of the URL will be ignored.'
+        );
       });
     });
 
@@ -229,7 +245,7 @@ describe('CollectorMetricExporter - node (getDefaultUrl)', () => {
   it('should default to localhost', done => {
     const collectorExporter = new CollectorMetricExporter({});
     setTimeout(() => {
-      assert.strictEqual(collectorExporter['url'], 'localhost:55680');
+      assert.strictEqual(collectorExporter['url'], 'localhost:4317');
       done();
     });
   });
@@ -237,9 +253,33 @@ describe('CollectorMetricExporter - node (getDefaultUrl)', () => {
     const url = 'http://foo.bar.com';
     const collectorExporter = new CollectorMetricExporter({ url });
     setTimeout(() => {
-      assert.strictEqual(collectorExporter['url'], url);
+      assert.strictEqual(collectorExporter['url'], 'foo.bar.com');
       done();
     });
+  });
+});
+
+describe('when configuring via environment', () => {
+  const envSource = process.env;
+  it('should use url defined in env', () => {
+    envSource.OTEL_EXPORTER_OTLP_ENDPOINT = 'http://foo.bar';
+    const collectorExporter = new CollectorMetricExporter();
+    assert.strictEqual(
+      collectorExporter.url,
+      'foo.bar'
+    );
+    envSource.OTEL_EXPORTER_OTLP_ENDPOINT = '';
+  });
+  it('should override global exporter url with signal url defined in env', () => {
+    envSource.OTEL_EXPORTER_OTLP_ENDPOINT = 'http://foo.bar';
+    envSource.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT = 'http://foo.metrics';
+    const collectorExporter = new CollectorMetricExporter();
+    assert.strictEqual(
+      collectorExporter.url,
+      'foo.metrics'
+    );
+    envSource.OTEL_EXPORTER_OTLP_ENDPOINT = '';
+    envSource.OTEL_EXPORTER_OTLP_METRICS_ENDPOINT = '';
   });
 });
 

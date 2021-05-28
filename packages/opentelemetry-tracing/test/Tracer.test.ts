@@ -14,28 +14,29 @@
  * limitations under the License.
  */
 
-import * as assert from 'assert';
 import {
-  NoopSpan,
+  INVALID_TRACEID,
+  ROOT_CONTEXT,
   Sampler,
   SamplingDecision,
-  NOOP_SPAN,
   TraceFlags,
-  ROOT_CONTEXT,
-  suppressInstrumentation,
+  SpanContext,
+  trace,
 } from '@opentelemetry/api';
-import { BasicTracerProvider, Tracer, Span } from '../src';
 import {
-  InstrumentationLibrary,
-  NoopLogger,
-  AlwaysOnSampler,
   AlwaysOffSampler,
+  AlwaysOnSampler,
+  InstrumentationLibrary,
+  suppressTracing,
 } from '@opentelemetry/core';
+import * as assert from 'assert';
+import { BasicTracerProvider, Span, Tracer } from '../src';
 
 describe('Tracer', () => {
-  const tracerProvider = new BasicTracerProvider({
-    logger: new NoopLogger(),
-  });
+  const tracerProvider = new BasicTracerProvider();
+  const envSource = (typeof window !== 'undefined'
+    ? window
+    : process.env) as any;
 
   class TestSampler implements Sampler {
     shouldSample() {
@@ -49,9 +50,8 @@ describe('Tracer', () => {
   }
 
   afterEach(() => {
-    if (typeof process !== 'undefined' && process.release.name === 'node') {
-      delete process.env.OTEL_SAMPLING_PROBABILITY;
-    }
+    delete envSource.OTEL_TRACES_SAMPLER;
+    delete envSource.OTEL_TRACES_SAMPLER_ARG;
   });
 
   it('should create a Tracer instance', () => {
@@ -63,13 +63,16 @@ describe('Tracer', () => {
     assert.ok(tracer instanceof Tracer);
   });
 
-  it('should use an AlwaysOnSampler by default', () => {
+  it('should use an ParentBasedSampler by default', () => {
     const tracer = new Tracer(
       { name: 'default', version: '0.0.1' },
       {},
       tracerProvider
     );
-    assert.strictEqual(tracer['_sampler'].toString(), 'AlwaysOnSampler');
+    assert.strictEqual(
+      tracer['_sampler'].toString(),
+      'ParentBased{root=AlwaysOnSampler, remoteParentSampled=AlwaysOnSampler, remoteParentNotSampled=AlwaysOffSampler, localParentSampled=AlwaysOnSampler, localParentNotSampled=AlwaysOffSampler}'
+    );
   });
 
   it('should respect NO_RECORD sampling result', () => {
@@ -79,7 +82,7 @@ describe('Tracer', () => {
       tracerProvider
     );
     const span = tracer.startSpan('span1');
-    assert.ok(span instanceof NoopSpan);
+    assert.ok(!span.isRecording());
     span.end();
   });
 
@@ -90,7 +93,7 @@ describe('Tracer', () => {
       tracerProvider
     );
     const span = tracer.startSpan('span2');
-    assert.ok(!(span instanceof NoopSpan));
+    assert.ok(span.isRecording());
     span.end();
   });
 
@@ -118,8 +121,8 @@ describe('Tracer', () => {
     assert.strictEqual(lib.version, '0.0.1');
   });
 
-  describe('when suppressInstrumentation true', () => {
-    const context = suppressInstrumentation(ROOT_CONTEXT);
+  describe('when suppressTracing true', () => {
+    const context = suppressTracing(ROOT_CONTEXT);
 
     it('should return cached no-op span ', done => {
       const tracer = new Tracer(
@@ -130,70 +133,91 @@ describe('Tracer', () => {
 
       const span = tracer.startSpan('span3', undefined, context);
 
-      assert.equal(span, NOOP_SPAN);
+      assert.ok(!span.isRecording());
       span.end();
 
       done();
     });
   });
 
-  if (typeof process !== 'undefined' && process.release.name === 'node') {
-    it('should sample a trace when OTEL_SAMPLING_PROBABILITY is invalid', () => {
-      process.env.OTEL_SAMPLING_PROBABILITY = 'invalid value';
-      const tracer = new Tracer(
-        { name: 'default', version: '0.0.1' },
-        {},
-        tracerProvider
-      );
-      const span = tracer.startSpan('my-span');
-      const context = span.context();
-      assert.strictEqual(context.traceFlags, TraceFlags.SAMPLED);
-      span.end();
-    });
-  }
+  it('should use traceId and spanId from parent', () => {
+    const parent: SpanContext = {
+      traceId: '00112233445566778899001122334455',
+      spanId: '0011223344556677',
+      traceFlags: TraceFlags.SAMPLED,
+    };
+    const tracer = new Tracer(
+      { name: 'default', version: '0.0.1' },
+      {},
+      tracerProvider
+    );
+    const span = tracer.startSpan(
+      'aSpan',
+      undefined,
+      trace.setSpanContext(ROOT_CONTEXT, parent)
+    );
+    assert.strictEqual((span as Span).parentSpanId, parent.spanId);
+    assert.strictEqual(span.spanContext().traceId, parent.traceId);
+  });
 
-  if (typeof process !== 'undefined' && process.release.name === 'node') {
-    it('should sample a trace when OTEL_SAMPLING_PROBABILITY is greater than 1', () => {
-      process.env.OTEL_SAMPLING_PROBABILITY = '2';
-      const tracer = new Tracer(
-        { name: 'default', version: '0.0.1' },
-        {},
-        tracerProvider
-      );
-      const span = tracer.startSpan('my-span');
-      const context = span.context();
-      assert.strictEqual(context.traceFlags, TraceFlags.SAMPLED);
-      span.end();
-    });
-  }
+  it('should not use spanId from invalid parent', () => {
+    const parent: SpanContext = {
+      traceId: INVALID_TRACEID,
+      spanId: '0011223344556677',
+      traceFlags: TraceFlags.SAMPLED,
+    };
+    const tracer = new Tracer(
+      { name: 'default', version: '0.0.1' },
+      {},
+      tracerProvider
+    );
+    const span = tracer.startSpan(
+      'aSpan',
+      undefined,
+      trace.setSpanContext(ROOT_CONTEXT, parent)
+    );
+    assert.strictEqual((span as Span).parentSpanId, undefined);
+  });
 
-  if (typeof process !== 'undefined' && process.release.name === 'node') {
-    it('should not sample a trace when OTEL_SAMPLING_PROBABILITY is 0', () => {
-      process.env.OTEL_SAMPLING_PROBABILITY = '0';
-      const tracer = new Tracer(
-        { name: 'default', version: '0.0.1' },
-        {},
-        tracerProvider
-      );
-      const span = tracer.startSpan('my-span');
-      const context = span.context();
-      assert.strictEqual(context.traceFlags, TraceFlags.NONE);
-      span.end();
-    });
-  }
+  it('should sample a trace when OTEL_TRACES_SAMPLER_ARG is unset', () => {
+    envSource.OTEL_TRACES_SAMPLER = 'traceidratio';
+    envSource.OTEL_TRACES_SAMPLER_ARG = '';
+    const tracer = new Tracer(
+      { name: 'default', version: '0.0.1' },
+      {},
+      tracerProvider
+    );
+    const span = tracer.startSpan('my-span');
+    const context = span.spanContext();
+    assert.strictEqual(context.traceFlags, TraceFlags.SAMPLED);
+    span.end();
+  });
 
-  if (typeof process !== 'undefined' && process.release.name === 'node') {
-    it('should not sample a trace when OTEL_SAMPLING_PROBABILITY is less than 0', () => {
-      process.env.OTEL_SAMPLING_PROBABILITY = '-1';
-      const tracer = new Tracer(
-        { name: 'default', version: '0.0.1' },
-        {},
-        tracerProvider
-      );
-      const span = tracer.startSpan('my-span');
-      const context = span.context();
-      assert.strictEqual(context.traceFlags, TraceFlags.NONE);
-      span.end();
-    });
-  }
+  it('should not sample a trace when OTEL_TRACES_SAMPLER_ARG is out of range', () => {
+    envSource.OTEL_TRACES_SAMPLER = 'traceidratio';
+    envSource.OTEL_TRACES_SAMPLER_ARG = '2';
+    const tracer = new Tracer(
+      { name: 'default', version: '0.0.1' },
+      {},
+      tracerProvider
+    );
+    const span = tracer.startSpan('my-span');
+    const context = span.spanContext();
+    assert.strictEqual(context.traceFlags, TraceFlags.SAMPLED);
+    span.end();
+  });
+
+  it('should not sample a trace when OTEL_TRACES_SAMPLER_ARG is 0', () => {
+    envSource.OTEL_TRACES_SAMPLER = 'traceidratio';
+    envSource.OTEL_TRACES_SAMPLER_ARG = '0';
+    const tracer = new Tracer(
+      { name: 'default', version: '0.0.1' },
+      {},
+      tracerProvider
+    );
+    const span = tracer.startSpan('my-span');
+    const context = span.spanContext();
+    assert.strictEqual(context.traceFlags, TraceFlags.NONE);
+    span.end();
+  });
 });

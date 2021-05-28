@@ -14,10 +14,10 @@
  * limitations under the License.
  */
 
-import { TextMapPropagator, Logger, Sampler } from '@opentelemetry/api';
-import { LogLevel, IdGenerator } from '@opentelemetry/core';
+import { TextMapPropagator, Sampler } from '@opentelemetry/api';
+import { IdGenerator } from '@opentelemetry/core';
 
-import { ContextManager } from '@opentelemetry/context-base';
+import { ContextManager } from '@opentelemetry/api';
 import { Resource } from '@opentelemetry/resources';
 
 /**
@@ -25,20 +25,12 @@ import { Resource } from '@opentelemetry/resources';
  */
 export interface TracerConfig {
   /**
-   * User provided logger.
-   */
-  logger?: Logger;
-
-  /** level of logger.  */
-  logLevel?: LogLevel;
-
-  /**
    * Sampler determines if a span should be recorded or should be a NoopSpan.
    */
   sampler?: Sampler;
 
-  /** Trace Parameters */
-  traceParams?: TraceParams;
+  /** Span Limits */
+  spanLimits?: SpanLimits;
 
   /** Resource associated with trace telemetry  */
   resource?: Resource;
@@ -48,6 +40,12 @@ export interface TracerConfig {
    * The default idGenerator generates random ids
    */
   idGenerator?: IdGenerator;
+
+  /**
+   * How long the forceFlush can run before it is cancelled.
+   * The default value is 30000ms
+   */
+  forceFlushTimeoutMillis?: number;
 }
 
 /**
@@ -64,19 +62,30 @@ export interface SDKRegistrationConfig {
 }
 
 /** Global configuration of trace service */
-export interface TraceParams {
-  /** numberOfAttributesPerSpan is number of attributes per span */
-  numberOfAttributesPerSpan?: number;
-  /** numberOfLinksPerSpan is number of links per span */
-  numberOfLinksPerSpan?: number;
-  /** numberOfEventsPerSpan is number of message events per span */
-  numberOfEventsPerSpan?: number;
+export interface SpanLimits {
+  /** attributeCountLimit is number of attributes per span */
+  attributeCountLimit?: number;
+  /** linkCountLimit is number of links per span */
+  linkCountLimit?: number;
+  /** eventCountLimit is number of message events per span */
+  eventCountLimit?: number;
 }
 
 /** Interface configuration for a buffer. */
 export interface BufferConfig {
-  /** Maximum size of a buffer. */
-  bufferSize?: number;
-  /** Max time for a buffer can wait before being sent */
-  bufferTimeout?: number;
+  /** The maximum batch size of every export. It must be smaller or equal to
+   * maxQueueSize. The default value is 512. */
+  maxExportBatchSize?: number;
+
+  /** The delay interval in milliseconds between two consecutive exports.
+   *  The default value is 5000ms. */
+  scheduledDelayMillis?: number;
+
+  /** How long the export can run before it is cancelled.
+   * The default value is 30000ms */
+  exportTimeoutMillis?: number;
+
+  /** The maximum queue size. After the size is reached spans are dropped.
+   * The default value is 2048. */
+  maxQueueSize?: number;
 }

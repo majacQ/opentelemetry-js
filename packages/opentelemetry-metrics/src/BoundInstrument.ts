@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 
-import * as api from '@opentelemetry/api';
+import { diag } from '@opentelemetry/api';
+import * as api from '@opentelemetry/api-metrics';
 import { Aggregator } from './export/types';
 
 /**
@@ -23,23 +24,20 @@ import { Aggregator } from './export/types';
  */
 export class BaseBoundInstrument {
   protected _labels: api.Labels;
-  protected _logger: api.Logger;
 
   constructor(
     labels: api.Labels,
-    logger: api.Logger,
     private readonly _disabled: boolean,
     private readonly _valueType: api.ValueType,
     private readonly _aggregator: Aggregator
   ) {
     this._labels = labels;
-    this._logger = logger;
   }
 
   update(value: number): void {
     if (this._disabled) return;
     if (typeof value !== 'number') {
-      this._logger.error(
+      diag.error(
         `Metric cannot accept a non-number value for ${Object.values(
           this._labels
         )}.`
@@ -48,7 +46,7 @@ export class BaseBoundInstrument {
     }
 
     if (this._valueType === api.ValueType.INT && !Number.isInteger(value)) {
-      this._logger.warn(
+      diag.warn(
         `INT value type cannot accept a floating-point value for ${Object.values(
           this._labels
         )}, ignoring the fractional digits.`
@@ -79,17 +77,14 @@ export class BoundCounter
     labels: api.Labels,
     disabled: boolean,
     valueType: api.ValueType,
-    logger: api.Logger,
     aggregator: Aggregator
   ) {
-    super(labels, logger, disabled, valueType, aggregator);
+    super(labels, disabled, valueType, aggregator);
   }
 
   add(value: number): void {
     if (value < 0) {
-      this._logger.error(
-        `Counter cannot descend for ${Object.values(this._labels)}`
-      );
+      diag.error(`Counter cannot descend for ${Object.values(this._labels)}`);
       return;
     }
 
@@ -109,10 +104,9 @@ export class BoundUpDownCounter
     labels: api.Labels,
     disabled: boolean,
     valueType: api.ValueType,
-    logger: api.Logger,
     aggregator: Aggregator
   ) {
-    super(labels, logger, disabled, valueType, aggregator);
+    super(labels, disabled, valueType, aggregator);
   }
 
   add(value: number): void {
@@ -130,10 +124,9 @@ export class BoundValueRecorder
     labels: api.Labels,
     disabled: boolean,
     valueType: api.ValueType,
-    logger: api.Logger,
     aggregator: Aggregator
   ) {
-    super(labels, logger, disabled, valueType, aggregator);
+    super(labels, disabled, valueType, aggregator);
   }
 
   record(value: number): void {
@@ -151,9 +144,8 @@ export class BoundObserver
     labels: api.Labels,
     disabled: boolean,
     valueType: api.ValueType,
-    logger: api.Logger,
     aggregator: Aggregator
   ) {
-    super(labels, logger, disabled, valueType, aggregator);
+    super(labels, disabled, valueType, aggregator);
   }
 }

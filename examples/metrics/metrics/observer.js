@@ -1,8 +1,11 @@
 'use strict';
 
 const { MeterProvider } = require('@opentelemetry/metrics');
-const { ConsoleLogger, LogLevel } = require('@opentelemetry/core');
+const { DiagConsoleLogger, DiagLogLevel, diag } = require('@opentelemetry/api');
 const { PrometheusExporter } = require('@opentelemetry/exporter-prometheus');
+
+// Optional and only needed to see the internal diagnostic logging (during development)
+diag.setLogger(new DiagConsoleLogger(), DiagLogLevel.DEBUG);
 
 const exporter = new PrometheusExporter(
   {
@@ -61,7 +64,6 @@ meter.createBatchObserver((observerBatchResult) => {
     });
   }, {
     maxTimeoutUpdateMS: 500,
-    logger: new ConsoleLogger(LogLevel.DEBUG)
   },
 );
 

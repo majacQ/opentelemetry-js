@@ -14,12 +14,12 @@
  * limitations under the License.
  */
 
-import { envDetector, K8S_RESOURCE, Resource } from '../../src';
+import { ResourceAttributes } from '@opentelemetry/semantic-conventions';
+import { envDetector, Resource } from '../../src';
 import {
   assertK8sResource,
   assertEmptyResource,
 } from '../util/resource-assertions';
-import { NoopLogger } from '@opentelemetry/core';
 
 describe('envDetector()', () => {
   describe('with valid env', () => {
@@ -33,22 +33,18 @@ describe('envDetector()', () => {
     });
 
     it('should return resource information from environment variable', async () => {
-      const resource: Resource = await envDetector.detect({
-        logger: new NoopLogger(),
-      });
+      const resource: Resource = await envDetector.detect();
       assertK8sResource(resource, {
-        [K8S_RESOURCE.POD_NAME]: 'pod-xyz-123',
-        [K8S_RESOURCE.CLUSTER_NAME]: 'c1',
-        [K8S_RESOURCE.NAMESPACE_NAME]: 'default',
+        [ResourceAttributes.K8S_POD_NAME]: 'pod-xyz-123',
+        [ResourceAttributes.K8S_CLUSTER_NAME]: 'c1',
+        [ResourceAttributes.K8S_NAMESPACE_NAME]: 'default',
       });
     });
   });
 
   describe('with empty env', () => {
     it('should return empty resource', async () => {
-      const resource: Resource = await envDetector.detect({
-        logger: new NoopLogger(),
-      });
+      const resource: Resource = await envDetector.detect();
       assertEmptyResource(resource);
     });
   });

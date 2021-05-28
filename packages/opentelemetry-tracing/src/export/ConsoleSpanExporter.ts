@@ -26,6 +26,8 @@ import {
  * This is implementation of {@link SpanExporter} that prints spans to the
  * console. This class can be used for diagnostic purposes.
  */
+
+/* eslint-disable no-console */
 export class ConsoleSpanExporter implements SpanExporter {
   /**
    * Export spans.
@@ -53,10 +55,10 @@ export class ConsoleSpanExporter implements SpanExporter {
    */
   private _exportInfo(span: ReadableSpan) {
     return {
-      traceId: span.spanContext.traceId,
+      traceId: span.spanContext().traceId,
       parentId: span.parentSpanId,
       name: span.name,
-      id: span.spanContext.spanId,
+      id: span.spanContext().spanId,
       kind: span.kind,
       timestamp: hrTimeToMicroseconds(span.startTime),
       duration: hrTimeToMicroseconds(span.duration),

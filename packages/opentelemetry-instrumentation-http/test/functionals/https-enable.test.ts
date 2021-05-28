@@ -15,23 +15,23 @@
  */
 
 import {
-  StatusCode,
+  SpanStatusCode,
   context,
   propagation,
   Span as ISpan,
   SpanKind,
+  trace,
 } from '@opentelemetry/api';
-import { NoopLogger } from '@opentelemetry/core';
 import { AsyncHooksContextManager } from '@opentelemetry/context-async-hooks';
-import { ContextManager } from '@opentelemetry/context-base';
+import { ContextManager } from '@opentelemetry/api';
 import {
   BasicTracerProvider,
   InMemorySpanExporter,
   SimpleSpanProcessor,
 } from '@opentelemetry/tracing';
 import {
-  GeneralAttribute,
-  HttpAttribute,
+  NetTransportValues,
+  SemanticAttributes,
 } from '@opentelemetry/semantic-conventions';
 import * as assert from 'assert';
 import * as fs from 'fs';
@@ -43,8 +43,7 @@ import { assertSpan } from '../utils/assertSpan';
 import { DummyPropagation } from '../utils/DummyPropagation';
 import { isWrapped } from '@opentelemetry/instrumentation';
 
-const logger = new NoopLogger();
-const instrumentation = new HttpInstrumentation({ logger });
+const instrumentation = new HttpInstrumentation();
 instrumentation.enable();
 instrumentation.disable();
 
@@ -62,13 +61,10 @@ const hostname = 'localhost';
 const serverName = 'my.server.name';
 const pathname = '/test';
 const memoryExporter = new InMemorySpanExporter();
-const provider = new BasicTracerProvider({
-  logger,
-});
+const provider = new BasicTracerProvider();
 instrumentation.setTracerProvider(provider);
 const tracer = provider.getTracer('test-https');
 provider.addSpanProcessor(new SimpleSpanProcessor(memoryExporter));
-propagation.setGlobalPropagator(new DummyPropagation());
 
 function doNock(
   hostname: string,
@@ -93,12 +89,14 @@ describe('HttpsInstrumentation', () => {
 
   beforeEach(() => {
     contextManager = new AsyncHooksContextManager().enable();
+    propagation.setGlobalPropagator(new DummyPropagation());
     context.setGlobalContextManager(contextManager);
   });
 
   afterEach(() => {
     contextManager.disable();
     context.disable();
+    propagation.disable();
   });
 
   describe('enable()', () => {
@@ -162,11 +160,11 @@ describe('HttpsInstrumentation', () => {
         assertSpan(incomingSpan, SpanKind.SERVER, validations);
         assertSpan(outgoingSpan, SpanKind.CLIENT, validations);
         assert.strictEqual(
-          incomingSpan.attributes[GeneralAttribute.NET_HOST_PORT],
+          incomingSpan.attributes[SemanticAttributes.NET_HOST_PORT],
           serverPort
         );
         assert.strictEqual(
-          outgoingSpan.attributes[GeneralAttribute.NET_PEER_PORT],
+          outgoingSpan.attributes[SemanticAttributes.NET_PEER_PORT],
           serverPort
         );
       });
@@ -198,6 +196,9 @@ describe('HttpsInstrumentation', () => {
             cert: fs.readFileSync('test/fixtures/server-cert.pem'),
           },
           (request, response) => {
+            if (request.url?.includes('/ignored')) {
+              tracer.startSpan('some-span').end();
+            }
             response.end('Test Server Response');
           }
         );
@@ -239,15 +240,15 @@ describe('HttpsInstrumentation', () => {
 
         assert.strictEqual(spans.length, 2);
         assert.strictEqual(
-          incomingSpan.attributes[HttpAttribute.HTTP_CLIENT_IP],
+          incomingSpan.attributes[SemanticAttributes.HTTP_CLIENT_IP],
           '<client>'
         );
         assert.strictEqual(
-          incomingSpan.attributes[GeneralAttribute.NET_HOST_PORT],
+          incomingSpan.attributes[SemanticAttributes.NET_HOST_PORT],
           serverPort
         );
         assert.strictEqual(
-          outgoingSpan.attributes[GeneralAttribute.NET_PEER_PORT],
+          outgoingSpan.attributes[SemanticAttributes.NET_PEER_PORT],
           serverPort
         );
 
@@ -255,10 +256,13 @@ describe('HttpsInstrumentation', () => {
           { span: incomingSpan, kind: SpanKind.SERVER },
           { span: outgoingSpan, kind: SpanKind.CLIENT },
         ].forEach(({ span, kind }) => {
-          assert.strictEqual(span.attributes[HttpAttribute.HTTP_FLAVOR], '1.1');
           assert.strictEqual(
-            span.attributes[GeneralAttribute.NET_TRANSPORT],
-            GeneralAttribute.IP_TCP
+            span.attributes[SemanticAttributes.HTTP_FLAVOR],
+            '1.1'
+          );
+          assert.strictEqual(
+            span.attributes[SemanticAttributes.NET_TRANSPORT],
+            NetTransportValues.IP_TCP
           );
           assertSpan(span, kind, validations);
         });
@@ -308,7 +312,7 @@ describe('HttpsInstrumentation', () => {
         doNock(hostname, testPath, 200, 'Ok');
         const name = 'TestRootSpan';
         const span = tracer.startSpan(name);
-        return tracer.withSpan(span, async () => {
+        return context.with(trace.setSpan(context.active(), span), async () => {
           const result = await httpsRequest.get(
             `${protocol}://${hostname}${testPath}`
           );
@@ -329,13 +333,13 @@ describe('HttpsInstrumentation', () => {
           assert.strictEqual(spans.length, 2);
           assert.strictEqual(reqSpan.name, 'HTTPS GET');
           assert.strictEqual(
-            localSpan.spanContext.traceId,
-            reqSpan.spanContext.traceId
+            localSpan.spanContext().traceId,
+            reqSpan.spanContext().traceId
           );
           assertSpan(reqSpan, SpanKind.CLIENT, validations);
           assert.notStrictEqual(
-            localSpan.spanContext.spanId,
-            reqSpan.spanContext.spanId
+            localSpan.spanContext().spanId,
+            reqSpan.spanContext().spanId
           );
         });
       });
@@ -351,7 +355,7 @@ describe('HttpsInstrumentation', () => {
           );
           const name = 'TestRootSpan';
           const span = tracer.startSpan(name);
-          return tracer.withSpan(span, async () => {
+          return context.with(trace.setSpan(context.active(), span), async () => {
             const result = await httpsRequest.get(
               `${protocol}://${hostname}${testPath}`
             );
@@ -372,13 +376,13 @@ describe('HttpsInstrumentation', () => {
             assert.strictEqual(spans.length, 2);
             assert.strictEqual(reqSpan.name, 'HTTPS GET');
             assert.strictEqual(
-              localSpan.spanContext.traceId,
-              reqSpan.spanContext.traceId
+              localSpan.spanContext().traceId,
+              reqSpan.spanContext().traceId
             );
             assertSpan(reqSpan, SpanKind.CLIENT, validations);
             assert.notStrictEqual(
-              localSpan.spanContext.spanId,
-              reqSpan.spanContext.spanId
+              localSpan.spanContext().spanId,
+              reqSpan.spanContext().spanId
             );
           });
         });
@@ -390,14 +394,14 @@ describe('HttpsInstrumentation', () => {
         doNock(hostname, testPath, 200, 'Ok', num);
         const name = 'TestRootSpan';
         const span = tracer.startSpan(name);
-        await tracer.withSpan(span, async () => {
+        await context.with(trace.setSpan(context.active(), span), async () => {
           for (let i = 0; i < num; i++) {
             await httpsRequest.get(`${protocol}://${hostname}${testPath}`);
             const spans = memoryExporter.getFinishedSpans();
             assert.strictEqual(spans[i].name, 'HTTPS GET');
             assert.strictEqual(
-              span.context().traceId,
-              spans[i].spanContext.traceId
+              span.spanContext().traceId,
+              spans[i].spanContext().traceId
             );
           }
           span.end();
@@ -514,6 +518,32 @@ describe('HttpsInstrumentation', () => {
         }
       });
 
+      it('should have 2 ended spans when provided "options" are an object without a constructor', async () => {
+        // Related issue: https://github.com/open-telemetry/opentelemetry-js/issues/2008
+        const testPath = '/outgoing/test';
+        const options = Object.create(null);
+        options.hostname = hostname;
+        options.port = serverPort;
+        options.path = pathname;
+        options.method = 'GET';
+
+        doNock(hostname, testPath, 200, 'Ok');
+
+        const promiseRequest = new Promise((resolve, _reject) => {
+          const req = https.request(options, (resp: http.IncomingMessage) => {
+            resp.on('data', () => {});
+            resp.on('end', () => {
+              resolve({});
+            });
+          });
+          return req.end();
+        });
+
+        await promiseRequest;
+        const spans = memoryExporter.getFinishedSpans();
+        assert.strictEqual(spans.length, 2);
+      });
+
       it('should have 1 ended span when response.end throw an exception', async () => {
         const testPath = '/outgoing/rootSpan/childs/1';
         doNock(hostname, testPath, 400, 'Not Ok');
@@ -576,7 +606,7 @@ describe('HttpsInstrumentation', () => {
           const spans = memoryExporter.getFinishedSpans();
           const [span] = spans;
           assert.strictEqual(spans.length, 1);
-          assert.strictEqual(span.status.code, StatusCode.ERROR);
+          assert.strictEqual(span.status.code, SpanStatusCode.ERROR);
           assert.ok(Object.keys(span.attributes).length >= 6);
         }
       });
@@ -614,7 +644,7 @@ describe('HttpsInstrumentation', () => {
           const spans = memoryExporter.getFinishedSpans();
           const [span] = spans;
           assert.strictEqual(spans.length, 1);
-          assert.strictEqual(span.status.code, StatusCode.ERROR);
+          assert.strictEqual(span.status.code, SpanStatusCode.ERROR);
           assert.ok(Object.keys(span.attributes).length > 7);
         }
       });
@@ -631,10 +661,10 @@ describe('HttpsInstrumentation', () => {
             assert.strictEqual(spans.length, 1);
             assert.ok(Object.keys(span.attributes).length > 6);
             assert.strictEqual(
-              span.attributes[HttpAttribute.HTTP_STATUS_CODE],
+              span.attributes[SemanticAttributes.HTTP_STATUS_CODE],
               404
             );
-            assert.strictEqual(span.status.code, StatusCode.ERROR);
+            assert.strictEqual(span.status.code, SpanStatusCode.ERROR);
             done();
           });
         });

@@ -1,17 +1,15 @@
-import { LogLevel } from '@opentelemetry/core';
 import { NodeTracerProvider } from '@opentelemetry/node';
- 
+
 import { SimpleSpanProcessor } from '@opentelemetry/tracing';
 import { ZipkinExporter } from '@opentelemetry/exporter-zipkin';
 // For Jaeger, use the following line instead:
 // import { JaegerExporter } from '@opentelemetry/exporter-jaeger';
- 
-const provider: NodeTracerProvider = new NodeTracerProvider({
-  logLevel: LogLevel.ERROR,
-});
- 
-provider.register();
- 
+
+const { registerInstrumentations } = require('@opentelemetry/instrumentation');
+const { ExpressInstrumentation } = require('@opentelemetry/instrumentation-express');
+const { HttpInstrumentation } = require('@opentelemetry/instrumentation-http');
+
+const provider: NodeTracerProvider = new NodeTracerProvider();
 provider.addSpanProcessor(
   new SimpleSpanProcessor(
     new ZipkinExporter({
@@ -24,5 +22,14 @@ provider.addSpanProcessor(
     }),
   ),
 );
- 
+provider.register();
+
+registerInstrumentations({
+  instrumentations: [
+    new ExpressInstrumentation(),
+    new HttpInstrumentation(),
+  ],
+});
+
+
 console.log('tracing initialized');

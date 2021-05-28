@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import * as api from '@opentelemetry/api';
+import * as api from '@opentelemetry/api-metrics';
 import { Resource } from '@opentelemetry/resources';
 import { InstrumentationLibrary } from '@opentelemetry/core';
 import { BoundUpDownCounter } from './BoundInstrument';
@@ -46,7 +46,6 @@ export class UpDownCounterMetric
       labels,
       this._disabled,
       this._valueType,
-      this._logger,
       this._processor.aggregatorFor(this._descriptor)
     );
   }

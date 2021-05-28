@@ -14,12 +14,8 @@
  * limitations under the License.
  */
 
-import * as api from '@opentelemetry/api';
-import {
-  ExportResult,
-  ExportResultCode,
-  NoopLogger,
-} from '@opentelemetry/core';
+import { diag } from '@opentelemetry/api';
+import { ExportResult, ExportResultCode, getEnv } from '@opentelemetry/core';
 import { SpanExporter, ReadableSpan } from '@opentelemetry/tracing';
 import { prepareSend } from './platform/index';
 import * as zipkinTypes from './types';
@@ -28,31 +24,37 @@ import {
   statusCodeTagName,
   statusDescriptionTagName,
 } from './transform';
-import { SERVICE_RESOURCE } from '@opentelemetry/resources';
+import { ResourceAttributes } from '@opentelemetry/semantic-conventions';
+import { prepareGetHeaders } from './utils';
 
 /**
  * Zipkin Exporter
  */
 export class ZipkinExporter implements SpanExporter {
-  static readonly DEFAULT_URL = 'http://localhost:9411/api/v2/spans';
   private readonly DEFAULT_SERVICE_NAME = 'OpenTelemetry Service';
-  private readonly _logger: api.Logger;
   private readonly _statusCodeTagName: string;
   private readonly _statusDescriptionTagName: string;
+  private _urlStr: string;
   private _send: zipkinTypes.SendFunction;
+  private _getHeaders: zipkinTypes.GetHeaders | undefined;
   private _serviceName?: string;
   private _isShutdown: boolean;
   private _sendingPromises: Promise<unknown>[] = [];
 
   constructor(config: zipkinTypes.ExporterConfig = {}) {
-    const urlStr = config.url || ZipkinExporter.DEFAULT_URL;
-    this._logger = config.logger || new NoopLogger();
-    this._send = prepareSend(this._logger, urlStr, config.headers);
+    this._urlStr = config.url || getEnv().OTEL_EXPORTER_ZIPKIN_ENDPOINT;
+    this._send = prepareSend(this._urlStr, config.headers);
     this._serviceName = config.serviceName;
     this._statusCodeTagName = config.statusCodeTagName || statusCodeTagName;
     this._statusDescriptionTagName =
       config.statusDescriptionTagName || statusDescriptionTagName;
     this._isShutdown = false;
+    if (typeof config.getExportRequestHeaders === 'function') {
+      this._getHeaders = prepareGetHeaders(config.getExportRequestHeaders);
+    } else {
+      // noop
+      this._beforeSend = function () {};
+    }
   }
 
   /**
@@ -64,11 +66,11 @@ export class ZipkinExporter implements SpanExporter {
   ) {
     if (typeof this._serviceName !== 'string') {
       this._serviceName = String(
-        spans[0].resource.attributes[SERVICE_RESOURCE.NAME] ||
+        spans[0].resource.attributes[ResourceAttributes.SERVICE_NAME] ||
           this.DEFAULT_SERVICE_NAME
       );
     }
-    this._logger.debug('Zipkin exporter export');
+    diag.debug('Zipkin exporter export');
     if (this._isShutdown) {
       setTimeout(() =>
         resultCallback({
@@ -78,7 +80,7 @@ export class ZipkinExporter implements SpanExporter {
       );
       return;
     }
-    const promise = new Promise(resolve => {
+    const promise = new Promise<void>(resolve => {
       this._sendSpans(spans, this._serviceName!, result => {
         resolve();
         resultCallback(result);
@@ -93,13 +95,25 @@ export class ZipkinExporter implements SpanExporter {
    * Shutdown exporter. Noop operation in this exporter.
    */
   shutdown(): Promise<void> {
-    this._logger.debug('Zipkin exporter shutdown');
+    diag.debug('Zipkin exporter shutdown');
     this._isShutdown = true;
     return new Promise((resolve, reject) => {
       Promise.all(this._sendingPromises).then(() => {
         resolve();
       }, reject);
     });
+  }
+
+  /**
+   * if user defines getExportRequestHeaders in config then this will be called
+   * everytime before send, otherwise it will be replaced with noop in
+   * constructor
+   * @default noop
+   */
+  private _beforeSend() {
+    if (this._getHeaders) {
+      this._send = prepareSend(this._urlStr, this._getHeaders());
+    }
   }
 
   /**
@@ -113,11 +127,16 @@ export class ZipkinExporter implements SpanExporter {
     const zipkinSpans = spans.map(span =>
       toZipkinSpan(
         span,
-        serviceName,
+        String(
+          span.attributes[ResourceAttributes.SERVICE_NAME] ||
+            span.resource.attributes[ResourceAttributes.SERVICE_NAME] ||
+            serviceName
+        ),
         this._statusCodeTagName,
         this._statusDescriptionTagName
       )
     );
+    this._beforeSend();
     return this._send(zipkinSpans, (result: ExportResult) => {
       if (done) {
         return done(result);

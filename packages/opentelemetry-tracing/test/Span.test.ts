@@ -15,9 +15,8 @@
  */
 
 import {
-  StatusCode,
+  SpanStatusCode,
   Exception,
-  LinkContext,
   ROOT_CONTEXT,
   SpanContext,
   SpanKind,
@@ -28,9 +27,8 @@ import {
   hrTimeDuration,
   hrTimeToMilliseconds,
   hrTimeToNanoseconds,
-  NoopLogger,
 } from '@opentelemetry/core';
-import { ExceptionAttribute } from '@opentelemetry/semantic-conventions';
+import { SemanticAttributes } from '@opentelemetry/semantic-conventions';
 import * as assert from 'assert';
 import { BasicTracerProvider, Span, SpanProcessor } from '../src';
 
@@ -38,10 +36,9 @@ const performanceTimeOrigin = hrTime();
 
 describe('Span', () => {
   const tracer = new BasicTracerProvider({
-    logger: new NoopLogger(),
-    traceParams: {
-      numberOfAttributesPerSpan: 100,
-      numberOfEventsPerSpan: 100,
+    spanLimits: {
+      attributeCountLimit: 100,
+      eventCountLimit: 100,
     },
   }).getTracer('default');
   const name = 'span1';
@@ -50,9 +47,10 @@ describe('Span', () => {
     spanId: '6e0c63257de34c92',
     traceFlags: TraceFlags.SAMPLED,
   };
-  const linkContext: LinkContext = {
+  const linkContext: SpanContext = {
     traceId: 'e4cda95b652f4a1592b449d5929fda1b',
     spanId: '7e0c63257de34c92',
+    traceFlags: TraceFlags.SAMPLED
   };
 
   it('should create a Span instance', () => {
@@ -181,7 +179,7 @@ describe('Span', () => {
       spanContext,
       SpanKind.CLIENT
     );
-    const context = span.context();
+    const context = span.spanContext();
     assert.strictEqual(context.traceId, spanContext.traceId);
     assert.strictEqual(context.traceFlags, TraceFlags.SAMPLED);
     assert.strictEqual(context.traceState, undefined);
@@ -231,9 +229,9 @@ describe('Span', () => {
     span.setAttribute('array<number>', [1, 2]);
     span.setAttribute('array<bool>', [true, false]);
 
-    //@ts-expect-error
+    //@ts-expect-error invalid attribute type object
     span.setAttribute('object', { foo: 'bar' });
-    //@ts-expect-error
+    //@ts-expect-error invalid attribute inhomogenous array
     span.setAttribute('non-homogeneous-array', [0, '']);
 
     assert.deepStrictEqual(span.attributes, {
@@ -279,9 +277,9 @@ describe('Span', () => {
       'array<string>': ['str1', 'str2'],
       'array<number>': [1, 2],
       'array<bool>': [true, false],
-      //@ts-expect-error
+      //@ts-expect-error invalid attribute type object
       object: { foo: 'bar' },
-      //@ts-expect-error
+      //@ts-expect-error invalid attribute inhomogenous array
       'non-homogeneous-array': [0, ''],
     });
 
@@ -314,9 +312,10 @@ describe('Span', () => {
       spanId: '5e0c63257de34c92',
       traceFlags: TraceFlags.SAMPLED,
     };
-    const linkContext: LinkContext = {
+    const linkContext: SpanContext = {
       traceId: 'b3cda95b652f4a1592b449d5929fda1b',
       spanId: '6e0c63257de34c92',
+      traceFlags: TraceFlags.SAMPLED
     };
     const attributes = { attr1: 'value', attr2: 123, attr3: true };
     const span = new Span(
@@ -362,7 +361,7 @@ describe('Span', () => {
       SpanKind.CLIENT
     );
     span.setStatus({
-      code: StatusCode.ERROR,
+      code: SpanStatusCode.ERROR,
       message: 'This is an error',
     });
     span.end();
@@ -382,9 +381,9 @@ describe('Span', () => {
     assert.strictEqual(span.name, 'my-span');
     assert.strictEqual(span.kind, SpanKind.INTERNAL);
     assert.strictEqual(span.parentSpanId, parentId);
-    assert.strictEqual(span.spanContext.traceId, spanContext.traceId);
+    assert.strictEqual(span.spanContext().traceId, spanContext.traceId);
     assert.deepStrictEqual(span.status, {
-      code: StatusCode.UNSET,
+      code: SpanStatusCode.UNSET,
     });
     assert.deepStrictEqual(span.attributes, {});
     assert.deepStrictEqual(span.links, []);
@@ -393,7 +392,7 @@ describe('Span', () => {
     assert.ok(span.instrumentationLibrary);
     const { name, version } = span.instrumentationLibrary;
     assert.strictEqual(name, 'default');
-    assert.strictEqual(version, '*');
+    assert.strictEqual(version, undefined);
   });
 
   it('should return ReadableSpan with attributes', () => {
@@ -496,19 +495,19 @@ describe('Span', () => {
       SpanKind.CLIENT
     );
     span.setStatus({
-      code: StatusCode.ERROR,
+      code: SpanStatusCode.ERROR,
       message: 'This is an error',
     });
-    assert.strictEqual(span.status.code, StatusCode.ERROR);
+    assert.strictEqual(span.status.code, SpanStatusCode.ERROR);
     assert.strictEqual(span.status.message, 'This is an error');
     span.end();
 
     // shouldn't update status
     span.setStatus({
-      code: StatusCode.OK,
+      code: SpanStatusCode.OK,
       message: 'OK',
     });
-    assert.strictEqual(span.status.code, StatusCode.ERROR);
+    assert.strictEqual(span.status.code, SpanStatusCode.ERROR);
   });
 
   it('should only end a span once', () => {
@@ -566,9 +565,7 @@ describe('Span', () => {
         shutdown: () => Promise.resolve(),
       };
 
-      const provider = new BasicTracerProvider({
-        logger: new NoopLogger(),
-      });
+      const provider = new BasicTracerProvider();
 
       provider.addSpanProcessor(processor);
 
@@ -587,9 +584,7 @@ describe('Span', () => {
         shutdown: () => Promise.resolve(),
       };
 
-      const provider = new BasicTracerProvider({
-        logger: new NoopLogger(),
-      });
+      const provider = new BasicTracerProvider();
 
       provider.addSpanProcessor(processor);
 
@@ -607,9 +602,7 @@ describe('Span', () => {
         shutdown: () => Promise.resolve(),
       };
 
-      const provider = new BasicTracerProvider({
-        logger: new NoopLogger(),
-      });
+      const provider = new BasicTracerProvider();
 
       provider.addSpanProcessor(processor);
 
@@ -700,10 +693,11 @@ describe('Span', () => {
 
           assert.ok(event.attributes);
 
-          const type = event.attributes[ExceptionAttribute.TYPE];
-          const message = event.attributes[ExceptionAttribute.MESSAGE];
+          const type = event.attributes[SemanticAttributes.EXCEPTION_TYPE];
+          const message =
+            event.attributes[SemanticAttributes.EXCEPTION_MESSAGE];
           const stacktrace = String(
-            event.attributes[ExceptionAttribute.STACKTRACE]
+            event.attributes[SemanticAttributes.EXCEPTION_STACKTRACE]
           );
           assert.strictEqual(type, 'Error');
           assert.strictEqual(message, 'boom');
@@ -725,6 +719,24 @@ describe('Span', () => {
         span.recordException('boom', [0, 123]);
         const event = span.events[0];
         assert.deepStrictEqual(event.time, [0, 123]);
+      });
+    });
+
+    describe('when exception code is numeric', () => {
+      it('should record an exception with string value', () => {
+        const span = new Span(
+          tracer,
+          ROOT_CONTEXT,
+          name,
+          spanContext,
+          SpanKind.CLIENT
+        );
+        assert.strictEqual(span.events.length, 0);
+        span.recordException({ code: 12 });
+        const event = span.events[0];
+        assert.deepStrictEqual(event.attributes, {
+          [SemanticAttributes.EXCEPTION_TYPE]: '12',
+        });
       });
     });
   });

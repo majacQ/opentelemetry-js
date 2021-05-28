@@ -1,11 +1,13 @@
 "use strict";
 
-const { LogLevel } = require("@opentelemetry/core");
 const { NodeTracerProvider } = require("@opentelemetry/node");
 const { SimpleSpanProcessor } = require("@opentelemetry/tracing");
 const { ZipkinExporter } = require("@opentelemetry/exporter-zipkin");
+const { registerInstrumentations } = require('@opentelemetry/instrumentation');
+const { ExpressInstrumentation } = require('@opentelemetry/instrumentation-express');
+const { HttpInstrumentation } = require('@opentelemetry/instrumentation-http');
 
-const provider = new NodeTracerProvider({ logLevel: LogLevel.ERROR });
+const provider = new NodeTracerProvider();
 
 provider.addSpanProcessor(
   new SimpleSpanProcessor(
@@ -19,4 +21,13 @@ provider.addSpanProcessor(
 );
 
 provider.register();
+
+// load old default plugins
+registerInstrumentations({
+  instrumentations: [
+    new ExpressInstrumentation(),
+    new HttpInstrumentation(),
+  ],
+});
+
 console.log("tracing initialized");

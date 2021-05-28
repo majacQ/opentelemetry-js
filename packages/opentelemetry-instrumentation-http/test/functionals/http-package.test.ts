@@ -16,7 +16,6 @@
 
 import { context, SpanKind, Span, propagation } from '@opentelemetry/api';
 import { AsyncHooksContextManager } from '@opentelemetry/context-async-hooks';
-import { NoopLogger } from '@opentelemetry/core';
 import { NodeTracerProvider } from '@opentelemetry/node';
 import {
   InMemorySpanExporter,
@@ -29,8 +28,7 @@ import { HttpInstrumentation } from '../../src/http';
 import { assertSpan } from '../utils/assertSpan';
 import { DummyPropagation } from '../utils/DummyPropagation';
 
-const logger = new NoopLogger();
-const instrumentation = new HttpInstrumentation({ logger });
+const instrumentation = new HttpInstrumentation();
 instrumentation.enable();
 instrumentation.disable();
 
@@ -56,18 +54,15 @@ describe('Packages', () => {
     context.disable();
   });
   describe('get', () => {
-    const logger = new NoopLogger();
-    const provider = new NodeTracerProvider({
-      logger,
-    });
+    const provider = new NodeTracerProvider();
     provider.addSpanProcessor(new SimpleSpanProcessor(memoryExporter));
     instrumentation.setTracerProvider(provider);
-    propagation.setGlobalPropagator(new DummyPropagation());
     beforeEach(() => {
       memoryExporter.reset();
     });
 
     before(() => {
+      propagation.setGlobalPropagator(new DummyPropagation());
       instrumentation.setConfig({
         applyCustomAttributesOnSpan: customAttributeFunction,
       });
@@ -76,6 +71,7 @@ describe('Packages', () => {
 
     after(() => {
       // back to normal
+      propagation.disable();
       nock.cleanAll();
       nock.enableNetConnect();
     });

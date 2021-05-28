@@ -20,7 +20,7 @@ import {
   AsyncLocalStorageContextManager,
 } from '../src';
 import { EventEmitter } from 'events';
-import { createContextKey, ROOT_CONTEXT } from '@opentelemetry/context-base';
+import { createContextKey, ROOT_CONTEXT } from '@opentelemetry/api';
 
 for (const contextManagerClass of [
   AsyncHooksContextManager,
@@ -31,6 +31,9 @@ for (const contextManagerClass of [
       | AsyncHooksContextManager
       | AsyncLocalStorageContextManager;
     const key1 = createContextKey('test key 1');
+    let otherContextManager:
+      | AsyncHooksContextManager
+      | AsyncLocalStorageContextManager;
 
     before(function () {
       if (
@@ -49,6 +52,7 @@ for (const contextManagerClass of [
 
     afterEach(() => {
       contextManager.disable();
+      otherContextManager?.disable();
     });
 
     describe('.enable()', () => {
@@ -107,6 +111,30 @@ for (const contextManagerClass of [
           });
         });
         return done();
+      });
+
+      it('should forward this, arguments and return value', () => {
+        function fnWithThis(this: string, a: string, b: number): string {
+          assert.strictEqual(this, 'that');
+          assert.strictEqual(arguments.length, 2);
+          assert.strictEqual(a, 'one');
+          assert.strictEqual(b, 2);
+          return 'done';
+        }
+
+        const res = contextManager.with(
+          ROOT_CONTEXT,
+          fnWithThis,
+          'that',
+          'one',
+          2
+        );
+        assert.strictEqual(res, 'done');
+
+        assert.strictEqual(
+          contextManager.with(ROOT_CONTEXT, () => 3.14),
+          3.14
+        );
       });
 
       it('should finally restore an old context', done => {
@@ -250,6 +278,22 @@ for (const contextManagerClass of [
           countDown();
         }, time2);
       });
+
+      it('should not influence other instances', () => {
+        otherContextManager = new contextManagerClass();
+        otherContextManager.enable();
+
+        const context = ROOT_CONTEXT.setValue(key1, 2);
+        const otherContext = ROOT_CONTEXT.setValue(key1, 3);
+        contextManager.with(context, () => {
+          assert.strictEqual(contextManager.active(), context);
+          assert.strictEqual(otherContextManager.active(), ROOT_CONTEXT);
+          otherContextManager.with(otherContext, () => {
+            assert.strictEqual(contextManager.active(), context);
+            assert.strictEqual(otherContextManager.active(), otherContext);
+          });
+        });
+      });
     });
 
     describe('.bind(function)', () => {
@@ -311,6 +355,22 @@ for (const contextManagerClass of [
         }, context);
         fn();
       });
+
+      it('should not influence other instances', () => {
+        otherContextManager = new contextManagerClass();
+        otherContextManager.enable();
+
+        const context = ROOT_CONTEXT.setValue(key1, 2);
+        const otherContext = ROOT_CONTEXT.setValue(key1, 3);
+        const fn = otherContextManager.bind(
+          contextManager.bind(() => {
+            assert.strictEqual(contextManager.active(), context);
+            assert.strictEqual(otherContextManager.active(), otherContext);
+          }, context),
+          otherContext
+        );
+        fn();
+      });
     });
 
     describe('.bind(event-emitter)', () => {
@@ -328,31 +388,49 @@ for (const contextManagerClass of [
       it('should return current context and removeListener (when enabled)', done => {
         const ee = new EventEmitter();
         const context = ROOT_CONTEXT.setValue(key1, 1);
-        const patchedEe = contextManager.bind(ee, context);
+        const patchedEE = contextManager.bind(ee, context);
         const handler = () => {
           assert.deepStrictEqual(contextManager.active(), context);
-          patchedEe.removeListener('test', handler);
-          assert.strictEqual(patchedEe.listeners('test').length, 0);
+          patchedEE.removeListener('test', handler);
+          assert.strictEqual(patchedEE.listeners('test').length, 0);
           return done();
         };
-        patchedEe.on('test', handler);
-        assert.strictEqual(patchedEe.listeners('test').length, 1);
-        patchedEe.emit('test');
+        patchedEE.on('test', handler);
+        assert.strictEqual(patchedEE.listeners('test').length, 1);
+        patchedEE.emit('test');
       });
 
       it('should return current context and removeAllListener (when enabled)', done => {
         const ee = new EventEmitter();
         const context = ROOT_CONTEXT.setValue(key1, 1);
-        const patchedEe = contextManager.bind(ee, context);
+        const patchedEE = contextManager.bind(ee, context);
         const handler = () => {
           assert.deepStrictEqual(contextManager.active(), context);
-          patchedEe.removeAllListeners('test');
-          assert.strictEqual(patchedEe.listeners('test').length, 0);
+          patchedEE.removeAllListeners('test');
+          assert.strictEqual(patchedEE.listeners('test').length, 0);
           return done();
         };
-        patchedEe.on('test', handler);
-        assert.strictEqual(patchedEe.listeners('test').length, 1);
-        patchedEe.emit('test');
+        patchedEE.on('test', handler);
+        assert.strictEqual(patchedEE.listeners('test').length, 1);
+        patchedEE.emit('test');
+      });
+
+      it('should return current context and removeAllListeners (when enabled)', done => {
+        const ee = new EventEmitter();
+        const context = ROOT_CONTEXT.setValue(key1, 1);
+        const patchedEE = contextManager.bind(ee, context);
+        const handler = () => {
+          assert.deepStrictEqual(contextManager.active(), context);
+          patchedEE.removeAllListeners();
+          assert.strictEqual(patchedEE.listeners('test').length, 0);
+          assert.strictEqual(patchedEE.listeners('test1').length, 0);
+          return done();
+        };
+        patchedEE.on('test', handler);
+        patchedEE.on('test1', handler);
+        assert.strictEqual(patchedEE.listeners('test').length, 1);
+        assert.strictEqual(patchedEE.listeners('test1').length, 1);
+        patchedEE.emit('test');
       });
 
       /**
@@ -363,34 +441,54 @@ for (const contextManagerClass of [
         contextManager.disable();
         const ee = new EventEmitter();
         const context = ROOT_CONTEXT.setValue(key1, 1);
-        const patchedEe = contextManager.bind(ee, context);
+        const patchedEE = contextManager.bind(ee, context);
         const handler = () => {
           assert.deepStrictEqual(contextManager.active(), context);
-          patchedEe.removeListener('test', handler);
-          assert.strictEqual(patchedEe.listeners('test').length, 0);
+          patchedEE.removeListener('test', handler);
+          assert.strictEqual(patchedEE.listeners('test').length, 0);
           return done();
         };
-        patchedEe.on('test', handler);
-        assert.strictEqual(patchedEe.listeners('test').length, 1);
-        patchedEe.emit('test');
+        patchedEE.on('test', handler);
+        assert.strictEqual(patchedEE.listeners('test').length, 1);
+        patchedEE.emit('test');
       });
 
       it('should not return current context with async op', done => {
         const ee = new EventEmitter();
         const context = ROOT_CONTEXT.setValue(key1, 1);
-        const patchedEe = contextManager.bind(ee, context);
+        const patchedEE = contextManager.bind(ee, context);
         const handler = () => {
           assert.deepStrictEqual(contextManager.active(), context);
           setImmediate(() => {
             assert.deepStrictEqual(contextManager.active(), context);
-            patchedEe.removeAllListeners('test');
-            assert.strictEqual(patchedEe.listeners('test').length, 0);
+            patchedEE.removeAllListeners('test');
+            assert.strictEqual(patchedEE.listeners('test').length, 0);
             return done();
           });
         };
-        patchedEe.on('test', handler);
-        assert.strictEqual(patchedEe.listeners('test').length, 1);
-        patchedEe.emit('test');
+        patchedEE.on('test', handler);
+        assert.strictEqual(patchedEE.listeners('test').length, 1);
+        patchedEE.emit('test');
+      });
+
+      it('should not influence other instances', () => {
+        const ee = new EventEmitter();
+        otherContextManager = new contextManagerClass();
+        otherContextManager.enable();
+
+        const context = ROOT_CONTEXT.setValue(key1, 2);
+        const otherContext = ROOT_CONTEXT.setValue(key1, 3);
+        const patchedEE = otherContextManager.bind(
+          contextManager.bind(ee, context),
+          otherContext
+        );
+        const handler = () => {
+          assert.strictEqual(contextManager.active(), context);
+          assert.strictEqual(otherContextManager.active(), otherContext);
+        };
+
+        patchedEE.on('test', handler);
+        patchedEE.emit('test');
       });
     });
   });

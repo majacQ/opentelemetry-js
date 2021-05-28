@@ -14,11 +14,12 @@
  * limitations under the License.
  */
 
-import { ConsoleLogger } from '@opentelemetry/core';
-import * as api from '@opentelemetry/api';
+import * as api from '@opentelemetry/api-metrics';
 import { Resource } from '@opentelemetry/resources';
 import { Meter } from '.';
 import { DEFAULT_CONFIG, MeterConfig } from './types';
+// eslint-disable-next-line @typescript-eslint/no-var-requires
+const merge = require('lodash.merge');
 
 /**
  * This class represents a meter provider which platform libraries can extend
@@ -29,13 +30,12 @@ export class MeterProvider implements api.MeterProvider {
   private _shuttingDownPromise: Promise<void> = Promise.resolve();
   private _isShutdown = false;
   readonly resource: Resource;
-  readonly logger: api.Logger;
 
-  constructor(config: MeterConfig = DEFAULT_CONFIG) {
-    this.logger = config.logger ?? new ConsoleLogger(config.logLevel);
-    this.resource = config.resource ?? Resource.createTelemetrySDKResource();
-    this._config = Object.assign({}, config, {
-      logger: this.logger,
+  constructor(config: MeterConfig = {}) {
+    const mergedConfig = merge({}, DEFAULT_CONFIG, config);
+    this.resource =
+      mergedConfig.resource ?? Resource.createTelemetrySDKResource();
+    this._config = Object.assign({}, mergedConfig, {
       resource: this.resource,
     });
   }
@@ -45,8 +45,8 @@ export class MeterProvider implements api.MeterProvider {
    *
    * @returns Meter A Meter with the given name and version
    */
-  getMeter(name: string, version = '*', config?: MeterConfig): Meter {
-    const key = `${name}@${version}`;
+  getMeter(name: string, version?: string, config?: MeterConfig): Meter {
+    const key = `${name}@${version || ''}`;
     if (!this._meters.has(key)) {
       this._meters.set(
         key,

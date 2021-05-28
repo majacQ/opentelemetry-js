@@ -16,7 +16,7 @@
 
 import * as protoLoader from '@grpc/proto-loader';
 import { collectorTypes } from '@opentelemetry/exporter-collector';
-import { ConsoleLogger, LogLevel } from '@opentelemetry/core';
+import { diag } from '@opentelemetry/api';
 import {
   BasicTracerProvider,
   SimpleSpanProcessor,
@@ -24,7 +24,7 @@ import {
 
 import * as assert from 'assert';
 import * as fs from 'fs';
-import * as grpc from 'grpc';
+import * as grpc from '@grpc/grpc-js';
 import * as path from 'path';
 import * as sinon from 'sinon';
 import { CollectorTraceExporter } from '../src';
@@ -104,9 +104,10 @@ const testCollectorExporter = (params: TestParams) =>
                 ]
               )
             : grpc.ServerCredentials.createInsecure();
-          server.bind(address, credentials);
-          server.start();
-          done();
+          server.bindAsync(address, credentials, () => {
+            server.start();
+            done();
+          });
         });
     });
 
@@ -124,7 +125,7 @@ const testCollectorExporter = (params: TestParams) =>
         : undefined;
       collectorExporter = new CollectorTraceExporter({
         serviceName: 'basic-service',
-        url: address,
+        url: 'grpcs://' + address,
         credentials,
         metadata: params.metadata,
       });
@@ -137,22 +138,34 @@ const testCollectorExporter = (params: TestParams) =>
     afterEach(() => {
       exportedData = undefined;
       reqMetadata = undefined;
+      sinon.restore();
     });
 
     describe('instance', () => {
       it('should warn about headers when using grpc', () => {
-        const logger = new ConsoleLogger(LogLevel.DEBUG);
-        const spyLoggerWarn = sinon.stub(logger, 'warn');
+        // Need to stub/spy on the underlying logger as the 'diag' instance is global
+        const spyLoggerWarn = sinon.stub(diag, 'warn');
         collectorExporter = new CollectorTraceExporter({
-          logger,
           serviceName: 'basic-service',
-          url: address,
+          url: `http://${address}`,
           headers: {
             foo: 'bar',
           },
         });
         const args = spyLoggerWarn.args[0];
         assert.strictEqual(args[0], 'Headers cannot be set when using grpc');
+      });
+      it('should warn about path in url', () => {
+        const spyLoggerWarn = sinon.stub(diag, 'warn');
+        collectorExporter = new CollectorTraceExporter({
+          serviceName: 'basic-service',
+          url: `http://${address}/v1/trace`,
+        });
+        const args = spyLoggerWarn.args[0];
+        assert.strictEqual(
+          args[0],
+          'URL path should not be set when using grpc, the path part of the URL will be ignored.'
+        );
       });
     });
 
@@ -194,7 +207,7 @@ describe('CollectorTraceExporter - node (getDefaultUrl)', () => {
   it('should default to localhost', done => {
     const collectorExporter = new CollectorTraceExporter({});
     setTimeout(() => {
-      assert.strictEqual(collectorExporter['url'], 'localhost:55680');
+      assert.strictEqual(collectorExporter['url'], 'localhost:4317');
       done();
     });
   });
@@ -202,9 +215,33 @@ describe('CollectorTraceExporter - node (getDefaultUrl)', () => {
     const url = 'http://foo.bar.com';
     const collectorExporter = new CollectorTraceExporter({ url });
     setTimeout(() => {
-      assert.strictEqual(collectorExporter['url'], url);
+      assert.strictEqual(collectorExporter['url'], 'foo.bar.com');
       done();
     });
+  });
+});
+
+describe('when configuring via environment', () => {
+  const envSource = process.env;
+  it('should use url defined in env', () => {
+    envSource.OTEL_EXPORTER_OTLP_ENDPOINT = 'http://foo.bar';
+    const collectorExporter = new CollectorTraceExporter();
+    assert.strictEqual(
+      collectorExporter.url,
+      'foo.bar'
+    );
+    envSource.OTEL_EXPORTER_OTLP_ENDPOINT = '';
+  });
+  it('should override global exporter url with signal url defined in env', () => {
+    envSource.OTEL_EXPORTER_OTLP_ENDPOINT = 'http://foo.bar';
+    envSource.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = 'http://foo.traces';
+    const collectorExporter = new CollectorTraceExporter();
+    assert.strictEqual(
+      collectorExporter.url,
+      'foo.traces'
+    );
+    envSource.OTEL_EXPORTER_OTLP_ENDPOINT = '';
+    envSource.OTEL_EXPORTER_OTLP_TRACES_ENDPOINT = '';
   });
 });
 

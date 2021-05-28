@@ -14,19 +14,16 @@
  * limitations under the License.
  */
 
-import { Logger, Exception } from '@opentelemetry/api';
-import { ConsoleLogger } from './ConsoleLogger';
-import { ErrorHandler, LogLevel } from './types';
+import { diag, Exception } from '@opentelemetry/api';
+import { ErrorHandler } from './types';
 
 /**
  * Returns a function that logs an error using the provided logger, or a
  * console logger if one was not provided.
- * @param {Logger} logger
  */
-export function loggingErrorHandler(logger?: Logger): ErrorHandler {
-  logger = logger ?? new ConsoleLogger(LogLevel.ERROR);
+export function loggingErrorHandler(): ErrorHandler {
   return (ex: Exception) => {
-    logger!.error(stringifyException(ex));
+    diag.error(stringifyException(ex));
   };
 }
 

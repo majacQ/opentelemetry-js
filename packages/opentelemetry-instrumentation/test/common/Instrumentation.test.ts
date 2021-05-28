@@ -15,12 +15,19 @@
  */
 
 import * as assert from 'assert';
-import { Instrumentation } from '../../src';
-import { InstrumentationAbstract } from '../../src/instrumentation';
+import {
+  Instrumentation,
+  InstrumentationBase,
+  InstrumentationConfig,
+} from '../../src';
 
-class TestInstrumentation extends InstrumentationAbstract {
-  constructor() {
-    super('test', '1.0.0');
+interface TestInstrumentationConfig extends InstrumentationConfig {
+  isActive?: boolean;
+}
+
+class TestInstrumentation extends InstrumentationBase {
+  constructor(config: TestInstrumentationConfig & InstrumentationConfig = {}) {
+    super('test', '1.0.0', Object.assign({}, config));
   }
   enable() {}
   disable() {}
@@ -34,7 +41,7 @@ describe('BaseInstrumentation', () => {
   });
 
   it('should create an instance', () => {
-    assert.ok(instrumentation instanceof InstrumentationAbstract);
+    assert.ok(instrumentation instanceof InstrumentationBase);
   });
 
   it('should have a name', () => {
@@ -43,5 +50,43 @@ describe('BaseInstrumentation', () => {
 
   it('should have a version', () => {
     assert.deepStrictEqual(instrumentation.instrumentationVersion, '1.0.0');
+  });
+
+  describe('constructor', () => {
+    it('should enable instrumentation by default', () => {
+      let called = false;
+      class TestInstrumentation2 extends TestInstrumentation {
+        enable() {
+          called = true;
+        }
+      }
+      instrumentation = new TestInstrumentation2();
+      assert.strictEqual(called, true);
+    });
+  });
+
+  describe('getConfig', () => {
+    it('should return instrumentation config', () => {
+      const instrumentation: Instrumentation = new TestInstrumentation({
+        isActive: false,
+      });
+      const configuration =
+        instrumentation.getConfig() as TestInstrumentationConfig;
+      assert.notStrictEqual(configuration, null);
+      assert.strictEqual(configuration.isActive, false);
+    });
+  });
+
+  describe('setConfig', () => {
+    it('should set a new config for instrumentation', () => {
+      const instrumentation: Instrumentation = new TestInstrumentation();
+      const config: TestInstrumentationConfig = {
+        isActive: true,
+      };
+      instrumentation.setConfig(config);
+      const configuration =
+        instrumentation.getConfig() as TestInstrumentationConfig;
+      assert.strictEqual(configuration.isActive, true);
+    });
   });
 });

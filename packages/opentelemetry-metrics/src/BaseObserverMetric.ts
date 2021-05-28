@@ -13,7 +13,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import * as api from '@opentelemetry/api';
+import * as api from '@opentelemetry/api-metrics';
 import { InstrumentationLibrary } from '@opentelemetry/core';
 import { Resource } from '@opentelemetry/resources';
 import { BoundObserver } from './BoundInstrument';
@@ -51,7 +51,6 @@ export abstract class BaseObserverMetric
       labels,
       this._disabled,
       this._valueType,
-      this._logger,
       this._processor.aggregatorFor(this._descriptor)
     );
   }

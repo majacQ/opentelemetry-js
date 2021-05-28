@@ -21,7 +21,9 @@ import { CollectorExporterBase } from '../../CollectorExporterBase';
 import { CollectorExporterNodeConfigBase } from './types';
 import * as collectorTypes from '../../types';
 import { parseHeaders } from '../../util';
-import { sendWithHttp } from './util';
+import { createHttpAgent, sendWithHttp } from './util';
+import { diag } from '@opentelemetry/api';
+import { getEnv, baggageUtils } from '@opentelemetry/core';
 
 /**
  * Collector Metric Exporter abstract base class
@@ -36,26 +38,19 @@ export abstract class CollectorExporterNodeBase<
 > {
   DEFAULT_HEADERS: Record<string, string> = {};
   headers: Record<string, string>;
-  keepAlive: boolean = true;
-  httpAgentOptions: http.AgentOptions | https.AgentOptions = {};
+  agent: http.Agent | https.Agent | undefined;
+
   constructor(config: CollectorExporterNodeConfigBase = {}) {
     super(config);
     if ((config as any).metadata) {
-      this.logger.warn('Metadata cannot be set when using http');
+      diag.warn('Metadata cannot be set when using http');
     }
-    this.headers =
-      parseHeaders(config.headers, this.logger) || this.DEFAULT_HEADERS;
-    if (typeof config.keepAlive === 'boolean') {
-      this.keepAlive = config.keepAlive;
-    }
-    if (config.httpAgentOptions) {
-      if (!this.keepAlive) {
-        this.logger.warn(
-          'httpAgentOptions is used only when keepAlive is true'
-        );
-      }
-      this.httpAgentOptions = Object.assign({}, config.httpAgentOptions);
-    }
+    this.headers = Object.assign(
+      this.DEFAULT_HEADERS,
+      parseHeaders(config.headers),
+      baggageUtils.parseKeyPairsIntoRecord(getEnv().OTEL_EXPORTER_OTLP_HEADERS)
+    );
+    this.agent = createHttpAgent(config);
   }
 
   onInit(_config: CollectorExporterNodeConfigBase): void {
@@ -68,12 +63,12 @@ export abstract class CollectorExporterNodeBase<
     onError: (error: collectorTypes.CollectorExporterError) => void
   ): void {
     if (this._isShutdown) {
-      this.logger.debug('Shutdown already started. Cannot send objects');
+      diag.debug('Shutdown already started. Cannot send objects');
       return;
     }
     const serviceRequest = this.convert(objects);
 
-    const promise = new Promise(resolve => {
+    const promise = new Promise<void>(resolve => {
       const _onSuccess = (): void => {
         onSuccess();
         _onFinish();

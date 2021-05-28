@@ -15,7 +15,7 @@
  */
 
 import * as api from '@opentelemetry/api';
-import { ReadableSpan } from '@opentelemetry/tracing';
+import { ReadableSpan, TimedEvent } from '@opentelemetry/tracing';
 import { hrTimeToMicroseconds } from '@opentelemetry/core';
 import * as zipkinTypes from './types';
 import { Resource } from '@opentelemetry/resources';
@@ -43,10 +43,10 @@ export function toZipkinSpan(
   statusDescriptionTagName: string
 ): zipkinTypes.Span {
   const zipkinSpan: zipkinTypes.Span = {
-    traceId: span.spanContext.traceId,
+    traceId: span.spanContext().traceId,
     parentId: span.parentSpanId,
     name: span.name,
-    id: span.spanContext.spanId,
+    id: span.spanContext().spanId,
     kind: ZIPKIN_SPAN_KIND_MAPPING[span.kind],
     timestamp: hrTimeToMicroseconds(span.startTime),
     duration: hrTimeToMicroseconds(span.duration),
@@ -66,10 +66,10 @@ export function toZipkinSpan(
   return zipkinSpan;
 }
 
-/** Converts OpenTelemetry Attributes and Status to Zipkin Tags format. */
+/** Converts OpenTelemetry SpanAttributes and SpanStatus to Zipkin Tags format. */
 export function _toZipkinTags(
-  attributes: api.Attributes,
-  status: api.Status,
+  attributes: api.SpanAttributes,
+  status: api.SpanStatus,
   statusCodeTagName: string,
   statusDescriptionTagName: string,
   resource: Resource
@@ -78,7 +78,7 @@ export function _toZipkinTags(
   for (const key of Object.keys(attributes)) {
     tags[key] = String(attributes[key]);
   }
-  tags[statusCodeTagName] = String(api.StatusCode[status.code]);
+  tags[statusCodeTagName] = String(api.SpanStatusCode[status.code]);
   if (status.message) {
     tags[statusDescriptionTagName] = status.message;
   }
@@ -94,7 +94,7 @@ export function _toZipkinTags(
  * Converts OpenTelemetry Events to Zipkin Annotations format.
  */
 export function _toZipkinAnnotations(
-  events: api.TimedEvent[]
+  events: TimedEvent[]
 ): zipkinTypes.Annotation[] {
   return events.map(event => ({
     timestamp: hrTimeToMicroseconds(event.time),

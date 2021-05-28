@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 import { Span } from '@opentelemetry/api';
-import { HttpAttribute } from '@opentelemetry/semantic-conventions';
+import { registerInstrumentations } from '@opentelemetry/instrumentation';
+import { SemanticAttributes } from '@opentelemetry/semantic-conventions';
 import { ReadableSpan, SpanProcessor } from '@opentelemetry/tracing';
 import { WebTracerProvider } from '@opentelemetry/web';
 import { XMLHttpRequestInstrumentation } from '../src';
@@ -40,8 +41,10 @@ describe('unmocked xhr', () => {
   let testSpans: TestSpanProcessor;
   let provider: WebTracerProvider;
   beforeEach(() => {
-    provider = new WebTracerProvider({
-      plugins: [new XMLHttpRequestInstrumentation()],
+    provider = new WebTracerProvider();
+    registerInstrumentations({
+      instrumentations: [new XMLHttpRequestInstrumentation()],
+      tracerProvider: provider,
     });
     testSpans = new TestSpanProcessor();
     provider.addSpanProcessor(testSpans);
@@ -62,8 +65,9 @@ describe('unmocked xhr', () => {
         // content length comes from the PerformanceTiming resource; this ensures that our
         // matching logic found the right one
         assert.ok(
-          (span.attributes[HttpAttribute.HTTP_RESPONSE_CONTENT_LENGTH] as any) >
-            0
+          (span.attributes[
+            SemanticAttributes.HTTP_RESPONSE_CONTENT_LENGTH
+          ] as any) > 0
         );
         done();
       }, 500);

@@ -16,19 +16,6 @@
 
 import { Exception } from '@opentelemetry/api';
 
-export enum LogLevel {
-  ERROR,
-  WARN,
-  INFO,
-  DEBUG,
-}
-
-/**
- * This is equivalent to:
- * type LogLevelString = 'ERROR' | 'WARN' | 'INFO' | 'DEBUG';
- */
-export type LogLevelString = keyof typeof LogLevel;
-
 /**
  * This interface defines a fallback to read a timeOrigin when it is not available on performance.timeOrigin,
  * this happens for example on Safari Mac
@@ -51,13 +38,13 @@ export interface ShimWrapped {
 }
 
 /**
- * An instrumentation library consists of the name and version used to
- * obtain a tracer or meter from a provider. This metadata is made available
- * on ReadableSpan and MetricRecord for use by the export pipeline.
+ * An instrumentation library consists of the name and and optional version
+ * used to obtain a tracer or meter from a provider. This metadata is made
+ * available on ReadableSpan and MetricRecord for use by the export pipeline.
  */
 export interface InstrumentationLibrary {
   readonly name: string;
-  readonly version: string;
+  readonly version?: string;
 }
 
 /** Defines an error handler function */

@@ -13,10 +13,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-import { Attributes, StatusCode, Span, Status } from '@opentelemetry/api';
 import {
-  HttpAttribute,
-  GeneralAttribute,
+  SpanAttributes,
+  SpanStatusCode,
+  Span,
+  SpanStatus,
+  context,
+} from '@opentelemetry/api';
+import {
+  NetTransportValues,
+  SemanticAttributes,
 } from '@opentelemetry/semantic-conventions';
 import {
   ClientRequest,
@@ -26,8 +32,9 @@ import {
   RequestOptions,
   ServerResponse,
 } from 'http';
-import { Socket } from 'net';
+import { getRPCMetadata, RPCType } from '@opentelemetry/core';
 import * as url from 'url';
+import { AttributeNames } from './enums/AttributeNames';
 import { Err, IgnoreMatcher, ParsedRequestOptions } from './types';
 
 /**
@@ -63,14 +70,14 @@ export const getAbsoluteUrl = (
  */
 export const parseResponseStatus = (
   statusCode: number
-): Omit<Status, 'message'> => {
+): Omit<SpanStatus, 'message'> => {
   // 1xx, 2xx, 3xx are OK
   if (statusCode >= 100 && statusCode < 400) {
-    return { code: StatusCode.OK };
+    return { code: SpanStatusCode.OK };
   }
 
   // All other codes are error
-  return { code: StatusCode.ERROR };
+  return { code: SpanStatusCode.ERROR };
 };
 
 /**
@@ -89,10 +96,9 @@ export const hasExpectHeader = (options: RequestOptions): boolean => {
 /**
  * Check whether the given obj match pattern
  * @param constant e.g URL of request
- * @param obj obj to inspect
  * @param pattern Match pattern
  */
-export const satisfiesPattern = <T>(
+export const satisfiesPattern = (
   constant: string,
   pattern: IgnoreMatcher
 ): boolean => {
@@ -154,27 +160,89 @@ export const setSpanWithError = (
   const message = error.message;
 
   span.setAttributes({
-    [HttpAttribute.HTTP_ERROR_NAME]: error.name,
-    [HttpAttribute.HTTP_ERROR_MESSAGE]: message,
+    [AttributeNames.HTTP_ERROR_NAME]: error.name,
+    [AttributeNames.HTTP_ERROR_MESSAGE]: message,
   });
 
   if (!obj) {
-    span.setStatus({ code: StatusCode.ERROR, message });
+    span.setStatus({ code: SpanStatusCode.ERROR, message });
     return;
   }
 
-  let status: Status;
+  let status: SpanStatus;
   if ((obj as IncomingMessage).statusCode) {
     status = parseResponseStatus((obj as IncomingMessage).statusCode!);
   } else if ((obj as ClientRequest).aborted) {
-    status = { code: StatusCode.ERROR };
+    status = { code: SpanStatusCode.ERROR };
   } else {
-    status = { code: StatusCode.ERROR };
+    status = { code: SpanStatusCode.ERROR };
   }
 
   status.message = message;
 
   span.setStatus(status);
+};
+
+/**
+ * Adds attributes for request content-length and content-encoding HTTP headers
+ * @param { IncomingMessage } Request object whose headers will be analyzed
+ * @param { SpanAttributes } SpanAttributes object to be modified
+ */
+export const setRequestContentLengthAttribute = (
+  request: IncomingMessage,
+  attributes: SpanAttributes
+) => {
+  const length = getContentLength(request.headers);
+  if (length === null) return;
+
+  if (isCompressed(request.headers)) {
+    attributes[SemanticAttributes.HTTP_REQUEST_CONTENT_LENGTH] = length;
+  } else {
+    attributes[
+      SemanticAttributes.HTTP_REQUEST_CONTENT_LENGTH_UNCOMPRESSED
+    ] = length;
+  }
+};
+
+/**
+ * Adds attributes for response content-length and content-encoding HTTP headers
+ * @param { IncomingMessage } Response object whose headers will be analyzed
+ * @param { SpanAttributes } SpanAttributes object to be modified
+ */
+export const setResponseContentLengthAttribute = (
+  response: IncomingMessage,
+  attributes: SpanAttributes
+) => {
+  const length = getContentLength(response.headers);
+  if (length === null) return;
+
+  if (isCompressed(response.headers)) {
+    attributes[SemanticAttributes.HTTP_RESPONSE_CONTENT_LENGTH] = length;
+  } else {
+    attributes[
+      SemanticAttributes.HTTP_RESPONSE_CONTENT_LENGTH_UNCOMPRESSED
+    ] = length;
+  }
+};
+
+function getContentLength(
+  headers: OutgoingHttpHeaders | IncomingHttpHeaders
+): number | null {
+  const contentLengthHeader = headers['content-length'];
+  if (contentLengthHeader === undefined) return null;
+
+  const contentLength = parseInt(contentLengthHeader as string, 10);
+  if (isNaN(contentLength)) return null;
+
+  return contentLength;
+}
+
+export const isCompressed = (
+  headers: OutgoingHttpHeaders | IncomingHttpHeaders
+): boolean => {
+  const encoding = headers['content-encoding'];
+
+  return !!encoding && encoding !== 'identity';
 };
 
 /**
@@ -266,7 +334,7 @@ export const isValidOptionsType = (options: unknown): boolean => {
 export const getOutgoingRequestAttributes = (
   requestOptions: ParsedRequestOptions,
   options: { component: string; hostname: string }
-): Attributes => {
+): SpanAttributes => {
   const host = requestOptions.host;
   const hostname =
     requestOptions.hostname ||
@@ -276,19 +344,19 @@ export const getOutgoingRequestAttributes = (
   const method = requestMethod ? requestMethod.toUpperCase() : 'GET';
   const headers = requestOptions.headers || {};
   const userAgent = headers['user-agent'];
-  const attributes: Attributes = {
-    [HttpAttribute.HTTP_URL]: getAbsoluteUrl(
+  const attributes: SpanAttributes = {
+    [SemanticAttributes.HTTP_URL]: getAbsoluteUrl(
       requestOptions,
       headers,
       `${options.component}:`
     ),
-    [HttpAttribute.HTTP_METHOD]: method,
-    [HttpAttribute.HTTP_TARGET]: requestOptions.path || '/',
-    [GeneralAttribute.NET_PEER_NAME]: hostname,
+    [SemanticAttributes.HTTP_METHOD]: method,
+    [SemanticAttributes.HTTP_TARGET]: requestOptions.path || '/',
+    [SemanticAttributes.NET_PEER_NAME]: hostname,
   };
 
   if (userAgent !== undefined) {
-    attributes[HttpAttribute.HTTP_USER_AGENT] = userAgent;
+    attributes[SemanticAttributes.HTTP_USER_AGENT] = userAgent;
   }
   return attributes;
 };
@@ -297,14 +365,14 @@ export const getOutgoingRequestAttributes = (
  * Returns attributes related to the kind of HTTP protocol used
  * @param {string} [kind] Kind of HTTP protocol used: "1.0", "1.1", "2", "SPDY" or "QUIC".
  */
-export const getAttributesFromHttpKind = (kind?: string): Attributes => {
-  const attributes: Attributes = {};
+export const getAttributesFromHttpKind = (kind?: string): SpanAttributes => {
+  const attributes: SpanAttributes = {};
   if (kind) {
-    attributes[HttpAttribute.HTTP_FLAVOR] = kind;
+    attributes[SemanticAttributes.HTTP_FLAVOR] = kind;
     if (kind.toUpperCase() !== 'QUIC') {
-      attributes[GeneralAttribute.NET_TRANSPORT] = GeneralAttribute.IP_TCP;
+      attributes[SemanticAttributes.NET_TRANSPORT] = NetTransportValues.IP_TCP;
     } else {
-      attributes[GeneralAttribute.NET_TRANSPORT] = GeneralAttribute.IP_UDP;
+      attributes[SemanticAttributes.NET_TRANSPORT] = NetTransportValues.IP_UDP;
     }
   }
   return attributes;
@@ -318,18 +386,19 @@ export const getAttributesFromHttpKind = (kind?: string): Attributes => {
 export const getOutgoingRequestAttributesOnResponse = (
   response: IncomingMessage,
   options: { hostname: string }
-): Attributes => {
+): SpanAttributes => {
   const { statusCode, statusMessage, httpVersion, socket } = response;
   const { remoteAddress, remotePort } = socket;
-  const attributes: Attributes = {
-    [GeneralAttribute.NET_PEER_IP]: remoteAddress,
-    [GeneralAttribute.NET_PEER_PORT]: remotePort,
-    [HttpAttribute.HTTP_HOST]: `${options.hostname}:${remotePort}`,
+  const attributes: SpanAttributes = {
+    [SemanticAttributes.NET_PEER_IP]: remoteAddress,
+    [SemanticAttributes.NET_PEER_PORT]: remotePort,
+    [SemanticAttributes.HTTP_HOST]: `${options.hostname}:${remotePort}`,
   };
+  setResponseContentLengthAttribute(response, attributes);
 
   if (statusCode) {
-    attributes[HttpAttribute.HTTP_STATUS_CODE] = statusCode;
-    attributes[HttpAttribute.HTTP_STATUS_TEXT] = (
+    attributes[SemanticAttributes.HTTP_STATUS_CODE] = statusCode;
+    attributes[AttributeNames.HTTP_STATUS_TEXT] = (
       statusMessage || ''
     ).toUpperCase();
   }
@@ -346,7 +415,7 @@ export const getOutgoingRequestAttributesOnResponse = (
 export const getIncomingRequestAttributes = (
   request: IncomingMessage,
   options: { component: string; serverName?: string }
-): Attributes => {
+): SpanAttributes => {
   const headers = request.headers;
   const userAgent = headers['user-agent'];
   const ips = headers['x-forwarded-for'];
@@ -359,33 +428,34 @@ export const getIncomingRequestAttributes = (
     host?.replace(/^(.*)(:[0-9]{1,5})/, '$1') ||
     'localhost';
   const serverName = options.serverName;
-  const attributes: Attributes = {
-    [HttpAttribute.HTTP_URL]: getAbsoluteUrl(
+  const attributes: SpanAttributes = {
+    [SemanticAttributes.HTTP_URL]: getAbsoluteUrl(
       requestUrl,
       headers,
       `${options.component}:`
     ),
-    [HttpAttribute.HTTP_HOST]: host,
-    [GeneralAttribute.NET_HOST_NAME]: hostname,
-    [HttpAttribute.HTTP_METHOD]: method,
+    [SemanticAttributes.HTTP_HOST]: host,
+    [SemanticAttributes.NET_HOST_NAME]: hostname,
+    [SemanticAttributes.HTTP_METHOD]: method,
   };
 
   if (typeof ips === 'string') {
-    attributes[HttpAttribute.HTTP_CLIENT_IP] = ips.split(',')[0];
+    attributes[SemanticAttributes.HTTP_CLIENT_IP] = ips.split(',')[0];
   }
 
   if (typeof serverName === 'string') {
-    attributes[HttpAttribute.HTTP_SERVER_NAME] = serverName;
+    attributes[SemanticAttributes.HTTP_SERVER_NAME] = serverName;
   }
 
   if (requestUrl) {
-    attributes[HttpAttribute.HTTP_ROUTE] = requestUrl.pathname || '/';
-    attributes[HttpAttribute.HTTP_TARGET] = requestUrl.pathname || '/';
+    attributes[SemanticAttributes.HTTP_ROUTE] = requestUrl.pathname || '/';
+    attributes[SemanticAttributes.HTTP_TARGET] = requestUrl.pathname || '/';
   }
 
   if (userAgent !== undefined) {
-    attributes[HttpAttribute.HTTP_USER_AGENT] = userAgent;
+    attributes[SemanticAttributes.HTTP_USER_AGENT] = userAgent;
   }
+  setRequestContentLengthAttribute(request, attributes);
 
   const httpKindAttributes = getAttributesFromHttpKind(httpVersion);
   return Object.assign(attributes, httpKindAttributes);
@@ -396,34 +466,27 @@ export const getIncomingRequestAttributes = (
  * @param {(ServerResponse & { socket: Socket; })} response the response object
  */
 export const getIncomingRequestAttributesOnResponse = (
-  request: IncomingMessage & { __ot_middlewares?: string[] },
-  response: ServerResponse & { socket: Socket }
-): Attributes => {
-  const { statusCode, statusMessage, socket } = response;
+  request: IncomingMessage,
+  response: ServerResponse
+): SpanAttributes => {
+  // take socket from the request,
+  // since it may be detached from the response object in keep-alive mode
+  const { socket } = request;
+  const { statusCode, statusMessage } = response;
   const { localAddress, localPort, remoteAddress, remotePort } = socket;
-  const { __ot_middlewares } = (request as unknown) as {
-    [key: string]: unknown;
-  };
-  const route = Array.isArray(__ot_middlewares)
-    ? __ot_middlewares
-        .filter(path => path !== '/')
-        .map(path => {
-          return path[0] === '/' ? path : '/' + path;
-        })
-        .join('')
-    : undefined;
+  const rpcMetadata = getRPCMetadata(context.active());
 
-  const attributes: Attributes = {
-    [GeneralAttribute.NET_HOST_IP]: localAddress,
-    [GeneralAttribute.NET_HOST_PORT]: localPort,
-    [GeneralAttribute.NET_PEER_IP]: remoteAddress,
-    [GeneralAttribute.NET_PEER_PORT]: remotePort,
-    [HttpAttribute.HTTP_STATUS_CODE]: statusCode,
-    [HttpAttribute.HTTP_STATUS_TEXT]: (statusMessage || '').toUpperCase(),
+  const attributes: SpanAttributes = {
+    [SemanticAttributes.NET_HOST_IP]: localAddress,
+    [SemanticAttributes.NET_HOST_PORT]: localPort,
+    [SemanticAttributes.NET_PEER_IP]: remoteAddress,
+    [SemanticAttributes.NET_PEER_PORT]: remotePort,
+    [SemanticAttributes.HTTP_STATUS_CODE]: statusCode,
+    [AttributeNames.HTTP_STATUS_TEXT]: (statusMessage || '').toUpperCase(),
   };
 
-  if (route !== undefined) {
-    attributes[HttpAttribute.HTTP_ROUTE] = route;
+  if (rpcMetadata?.type === RPCType.HTTP && rpcMetadata.route !== undefined) {
+    attributes[SemanticAttributes.HTTP_ROUTE] = rpcMetadata.route;
   }
   return attributes;
 };

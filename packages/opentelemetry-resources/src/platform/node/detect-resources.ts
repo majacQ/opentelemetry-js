@@ -15,13 +15,9 @@
  */
 
 import { Resource } from '../../Resource';
-import {
-  ResourceDetectionConfig,
-  ResourceDetectionConfigWithLogger,
-} from '../../config';
-import { Logger } from '@opentelemetry/api';
+import { ResourceDetectionConfig } from '../../config';
+import { diag } from '@opentelemetry/api';
 import * as util from 'util';
-import { NoopLogger } from '@opentelemetry/core';
 
 /**
  * Runs all resource detectors and returns the results merged into a single
@@ -32,29 +28,24 @@ import { NoopLogger } from '@opentelemetry/core';
 export const detectResources = async (
   config: ResourceDetectionConfig = {}
 ): Promise<Resource> => {
-  const internalConfig: ResourceDetectionConfigWithLogger = Object.assign(
-    {
-      logger: new NoopLogger(),
-    },
-    config
-  );
+  const internalConfig: ResourceDetectionConfig = Object.assign(config);
 
   const resources: Array<Resource> = await Promise.all(
     (internalConfig.detectors || []).map(async d => {
       try {
         const resource = await d.detect(internalConfig);
-        config.logger?.debug(`${d.constructor.name} found resource.`, resource);
+        diag.debug(`${d.constructor.name} found resource.`, resource);
         return resource;
       } catch (e) {
-        config.logger?.debug(`${d.constructor.name} failed: ${e.message}`);
+        diag.debug(`${d.constructor.name} failed: ${e.message}`);
         return Resource.empty();
       }
     })
   );
-  // Log Resources only if there is a user-provided logger
-  if (config.logger) {
-    logResources(config.logger, resources);
-  }
+
+  // Future check if verbose logging is enabled issue #1903
+  logResources(resources);
+
   return resources.reduce(
     (acc, resource) => acc.merge(resource),
     Resource.createTelemetrySDKResource()
@@ -64,10 +55,9 @@ export const detectResources = async (
 /**
  * Writes debug information about the detected resources to the logger defined in the resource detection config, if one is provided.
  *
- * @param logger The {@link Logger} to write the debug information to.
  * @param resources The array of {@link Resource} that should be logged. Empty entried will be ignored.
  */
-const logResources = (logger: Logger, resources: Array<Resource>) => {
+const logResources = (resources: Array<Resource>) => {
   resources.forEach(resource => {
     // Print only populated resources
     if (Object.keys(resource.attributes).length > 0) {
@@ -77,7 +67,7 @@ const logResources = (logger: Logger, resources: Array<Resource>) => {
         sorted: true,
         compact: false,
       });
-      logger.debug(resourceDebugString);
+      diag.verbose(resourceDebugString);
     }
   });
 };

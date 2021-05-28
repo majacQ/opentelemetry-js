@@ -14,25 +14,23 @@
  * limitations under the License.
  */
 
-import {
-  Detector,
-  Resource,
-  PROCESS_RESOURCE,
-  ResourceDetectionConfigWithLogger,
-} from '../../../';
+import { diag } from '@opentelemetry/api';
+import { ResourceAttributes as SemanticResourceAttributes } from '@opentelemetry/semantic-conventions';
+import { Detector, Resource, ResourceDetectionConfig } from '../../../';
 import { ResourceAttributes } from '../../../types';
 
 /**
- * ProcessDetector will be used to detect the resoureces related current process running
- * and being instumented from the NodeJS Process module.
+ * ProcessDetector will be used to detect the resources related current process running
+ * and being instrumented from the NodeJS Process module.
  */
 class ProcessDetector implements Detector {
-  async detect(config: ResourceDetectionConfigWithLogger): Promise<Resource> {
+  async detect(config?: ResourceDetectionConfig): Promise<Resource> {
     const processResource: ResourceAttributes = {
-      [PROCESS_RESOURCE.PID]: process.pid,
-      [PROCESS_RESOURCE.NAME]: process.title || '',
-      [PROCESS_RESOURCE.COMMAND]: process.argv[1] || '',
-      [PROCESS_RESOURCE.COMMAND_LINE]: process.argv.join(' ') || '',
+      [SemanticResourceAttributes.PROCESS_PID]: process.pid,
+      [SemanticResourceAttributes.PROCESS_EXECUTABLE_NAME]: process.title || '',
+      [SemanticResourceAttributes.PROCESS_COMMAND]: process.argv[1] || '',
+      [SemanticResourceAttributes.PROCESS_COMMAND_LINE]:
+        process.argv.join(' ') || '',
     };
     return this._getResourceAttributes(processResource, config);
   }
@@ -45,15 +43,17 @@ class ProcessDetector implements Detector {
    */
   private _getResourceAttributes(
     processResource: ResourceAttributes,
-    config: ResourceDetectionConfigWithLogger
+    _config?: ResourceDetectionConfig
   ) {
     if (
-      processResource[PROCESS_RESOURCE.NAME] === '' ||
-      processResource[PROCESS_RESOURCE.PATH] === '' ||
-      processResource[PROCESS_RESOURCE.COMMAND] === '' ||
-      processResource[PROCESS_RESOURCE.COMMAND_LINE] === ''
+      processResource[SemanticResourceAttributes.PROCESS_EXECUTABLE_NAME] ===
+        '' ||
+      processResource[SemanticResourceAttributes.PROCESS_EXECUTABLE_PATH] ===
+        '' ||
+      processResource[SemanticResourceAttributes.PROCESS_COMMAND] === '' ||
+      processResource[SemanticResourceAttributes.PROCESS_COMMAND_LINE] === ''
     ) {
-      config.logger.debug(
+      diag.debug(
         'ProcessDetector failed: Unable to find required process resources. '
       );
       return Resource.empty();

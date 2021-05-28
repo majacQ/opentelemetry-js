@@ -14,21 +14,26 @@
  * limitations under the License.
  */
 
-import { TextMapPropagator, metrics } from '@opentelemetry/api';
-import { ContextManager } from '@opentelemetry/context-base';
+import { TextMapPropagator } from '@opentelemetry/api';
+import { metrics } from '@opentelemetry/api-metrics';
+import { ContextManager } from '@opentelemetry/api';
 import { MeterConfig, MeterProvider } from '@opentelemetry/metrics';
+import {
+  InstrumentationOption,
+  registerInstrumentations,
+} from '@opentelemetry/instrumentation';
 import { NodeTracerConfig, NodeTracerProvider } from '@opentelemetry/node';
+import { awsEc2Detector } from '@opentelemetry/resource-detector-aws';
+import { gcpDetector } from '@opentelemetry/resource-detector-gcp';
 import {
   detectResources,
-  Resource,
-  ResourceDetectionConfig,
   envDetector,
   processDetector,
+  Resource,
+  ResourceDetectionConfig,
 } from '@opentelemetry/resources';
 import { BatchSpanProcessor, SpanProcessor } from '@opentelemetry/tracing';
 import { NodeSDKConfiguration } from './types';
-import { awsEc2Detector } from '@opentelemetry/resource-detector-aws';
-import { gcpDetector } from '@opentelemetry/resource-detector-gcp';
 
 /** This class represents everything needed to register a fully configured OpenTelemetry Node.js SDK */
 export class NodeSDK {
@@ -38,6 +43,7 @@ export class NodeSDK {
     contextManager?: ContextManager;
     textMapPropagator?: TextMapPropagator;
   };
+  private _instrumentations: InstrumentationOption[];
   private _meterProviderConfig?: MeterConfig;
 
   private _resource: Resource;
@@ -58,20 +64,11 @@ export class NodeSDK {
     if (configuration.spanProcessor || configuration.traceExporter) {
       const tracerProviderConfig: NodeTracerConfig = {};
 
-      if (typeof configuration.logLevel === 'number') {
-        tracerProviderConfig.logLevel = configuration.logLevel;
-      }
-      if (configuration.logger) {
-        tracerProviderConfig.logger = configuration.logger;
-      }
-      if (configuration.plugins) {
-        tracerProviderConfig.plugins = configuration.plugins;
-      }
       if (configuration.sampler) {
         tracerProviderConfig.sampler = configuration.sampler;
       }
-      if (configuration.traceParams) {
-        tracerProviderConfig.traceParams = configuration.traceParams;
+      if (configuration.spanLimits) {
+        tracerProviderConfig.spanLimits = configuration.spanLimits;
       }
 
       const spanProcessor =
@@ -98,17 +95,16 @@ export class NodeSDK {
       if (typeof configuration.metricInterval === 'number') {
         meterConfig.interval = configuration.metricInterval;
       }
-      if (typeof configuration.logLevel === 'number') {
-        meterConfig.logLevel = configuration.logLevel;
-      }
-      if (configuration.logger) {
-        meterConfig.logger = configuration.logger;
-      }
 
       this.configureMeterProvider(meterConfig);
     }
-  }
 
+    let instrumentations: InstrumentationOption[] = [];
+    if (configuration.instrumentations) {
+      instrumentations = configuration.instrumentations;
+    }
+    this._instrumentations = instrumentations;
+  }
   /** Set configurations required to register a NodeTracerProvider */
   public configureTracerProvider(
     tracerConfig: NodeTracerConfig,
@@ -177,6 +173,10 @@ export class NodeSDK {
 
       metrics.setGlobalMeterProvider(meterProvider);
     }
+
+    registerInstrumentations({
+      instrumentations: this._instrumentations,
+    });
   }
 
   public shutdown(): Promise<void> {

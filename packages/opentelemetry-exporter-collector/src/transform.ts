@@ -15,17 +15,15 @@
  */
 
 import {
-  Attributes,
+  SpanAttributes,
   Link,
   SpanKind,
-  Status,
-  StatusCode,
-  TimedEvent,
+  SpanStatus,
   TraceState,
 } from '@opentelemetry/api';
 import * as core from '@opentelemetry/core';
 import { Resource } from '@opentelemetry/resources';
-import { ReadableSpan } from '@opentelemetry/tracing';
+import { ReadableSpan, TimedEvent } from '@opentelemetry/tracing';
 import { CollectorExporterBase } from './CollectorExporterBase';
 import {
   COLLECTOR_SPAN_KIND_MAPPING,
@@ -33,12 +31,15 @@ import {
   CollectorExporterConfigBase,
 } from './types';
 
+const MAX_INTEGER_VALUE = 2147483647;
+const MIN_INTEGER_VALUE = -2147483648;
+
 /**
  * Converts attributes to KeyValue array
  * @param attributes
  */
 export function toCollectorAttributes(
-  attributes: Attributes
+  attributes: SpanAttributes
 ): opentelemetryProto.common.v1.KeyValue[] {
   return Object.keys(attributes).map(key => {
     return toCollectorAttributeKeyValue(key, attributes[key]);
@@ -62,7 +63,7 @@ export function toCollectorArrayValue(
  * @param attributes
  */
 export function toCollectorKeyValueList(
-  attributes: Attributes
+  attributes: SpanAttributes
 ): opentelemetryProto.common.v1.KeyValueList {
   return {
     values: toCollectorAttributes(attributes),
@@ -96,13 +97,19 @@ export function toCollectorAnyValue(
     anyValue.stringValue = value;
   } else if (typeof value === 'boolean') {
     anyValue.boolValue = value;
+  } else if (
+    typeof value === 'number' &&
+    value <= MAX_INTEGER_VALUE &&
+    value >= MIN_INTEGER_VALUE &&
+    Number.isInteger(value)
+  ) {
+    anyValue.intValue = value;
   } else if (typeof value === 'number') {
-    // all numbers will be treated as double
     anyValue.doubleValue = value;
   } else if (Array.isArray(value)) {
     anyValue.arrayValue = toCollectorArrayValue(value);
   } else if (value) {
-    anyValue.kvlistValue = toCollectorKeyValueList(value as Attributes);
+    anyValue.kvlistValue = toCollectorKeyValueList(value as SpanAttributes);
   }
   return anyValue;
 }
@@ -167,17 +174,17 @@ export function toCollectorSpan(
 ): opentelemetryProto.trace.v1.Span {
   return {
     traceId: useHex
-      ? span.spanContext.traceId
-      : core.hexToBase64(span.spanContext.traceId),
+      ? span.spanContext().traceId
+      : core.hexToBase64(span.spanContext().traceId),
     spanId: useHex
-      ? span.spanContext.spanId
-      : core.hexToBase64(span.spanContext.spanId),
+      ? span.spanContext().spanId
+      : core.hexToBase64(span.spanContext().spanId),
     parentSpanId: span.parentSpanId
       ? useHex
         ? span.parentSpanId
         : core.hexToBase64(span.parentSpanId)
       : undefined,
-    traceState: toCollectorTraceState(span.spanContext.traceState),
+    traceState: toCollectorTraceState(span.spanContext().traceState),
     name: span.name,
     kind: toCollectorKind(span.kind),
     startTimeUnixNano: core.hrTimeToNanoseconds(span.startTime),
@@ -193,31 +200,14 @@ export function toCollectorSpan(
 }
 
 /**
- * Converts StatusCode
- * @param code
- */
-export function toCollectorCode(
-  code: StatusCode
-): opentelemetryProto.trace.v1.StatusCode {
-  switch (code) {
-    case StatusCode.OK:
-      return opentelemetryProto.trace.v1.StatusCode.OK;
-    case StatusCode.UNSET:
-      return opentelemetryProto.trace.v1.StatusCode.UNSET;
-    default:
-      return opentelemetryProto.trace.v1.StatusCode.ERROR;
-  }
-}
-
-/**
  * Converts status
  * @param status
  */
 export function toCollectorStatus(
-  status: Status
-): opentelemetryProto.trace.v1.Status {
-  const spanStatus: opentelemetryProto.trace.v1.Status = {
-    code: toCollectorCode(status.code),
+  status: SpanStatus
+): opentelemetryProto.trace.v1.SpanStatus {
+  const spanStatus: opentelemetryProto.trace.v1.SpanStatus = {
+    code: status.code,
   };
   if (typeof status.message !== 'undefined') {
     spanStatus.message = status.message;
@@ -361,7 +351,7 @@ function toCollectorInstrumentationLibrarySpans(
  */
 function toCollectorResourceSpans(
   groupedSpans: Map<Resource, Map<core.InstrumentationLibrary, ReadableSpan[]>>,
-  baseAttributes: Attributes,
+  baseAttributes: SpanAttributes,
   useHex?: boolean
 ): opentelemetryProto.trace.v1.ResourceSpans[] {
   return Array.from(groupedSpans, ([resource, libSpans]) => {

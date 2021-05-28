@@ -16,20 +16,24 @@
 
 import * as assert from 'assert';
 import * as sinon from 'sinon';
-import { NoopLogger } from '@opentelemetry/core';
+import { diag } from '@opentelemetry/api';
 import { parseHeaders } from '../../src/util';
 
 describe('utils', () => {
+  afterEach(() => {
+    sinon.restore();
+  });
+
   describe('parseHeaders', () => {
     it('should ignore undefined headers', () => {
-      const logger = new NoopLogger();
-      const spyWarn = sinon.stub(logger, 'warn');
+      // Need to stub/spy on the underlying logger as the "diag" instance is global
+      const spyWarn = sinon.stub(diag, 'warn');
       const headers: Partial<Record<string, unknown>> = {
         foo1: undefined,
         foo2: 'bar',
         foo3: 1,
       };
-      const result = parseHeaders(headers, logger);
+      const result = parseHeaders(headers);
       assert.deepStrictEqual(result, {
         foo2: 'bar',
         foo3: '1',
@@ -40,6 +44,7 @@ describe('utils', () => {
         'Header "foo1" has wrong value and will be ignored'
       );
     });
+
     it('should parse undefined', () => {
       const result = parseHeaders(undefined);
       assert.deepStrictEqual(result, {});

@@ -14,11 +14,7 @@
  * limitations under the License.
  */
 
-import {
-  ContextManager,
-  Context,
-  ROOT_CONTEXT,
-} from '@opentelemetry/context-base';
+import { ContextManager, Context, ROOT_CONTEXT } from '@opentelemetry/api';
 
 /**
  * A test-only ContextManager that uses an in-memory stack to keep track of
@@ -33,13 +29,15 @@ export class TestStackContextManager implements ContextManager {
     return this._contextStack[this._contextStack.length - 1] ?? ROOT_CONTEXT;
   }
 
-  with<T extends (...args: unknown[]) => ReturnType<T>>(
+  with<A extends unknown[], F extends (...args: A) => ReturnType<F>>(
     context: Context,
-    fn: T
-  ): ReturnType<T> {
+    fn: F,
+    thisArg?: ThisParameterType<F>,
+    ...args: A
+  ): ReturnType<F> {
     this._contextStack.push(context);
     try {
-      return fn();
+      return fn.call(thisArg, ...args);
     } finally {
       this._contextStack.pop();
     }

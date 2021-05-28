@@ -14,20 +14,13 @@
  * limitations under the License.
  */
 
-import { LogLevel, getEnv } from '@opentelemetry/core';
-import * as api from '@opentelemetry/api';
+import * as api from '@opentelemetry/api-metrics';
+import { Resource } from '@opentelemetry/resources';
 import { Processor } from './export/Processor';
 import { MetricExporter } from './export/types';
-import { Resource } from '@opentelemetry/resources';
 
 /** MeterConfig provides an interface for configuring a Meter. */
 export interface MeterConfig {
-  /** User provided logger. */
-  logger?: api.Logger;
-
-  /** level of logger. */
-  logLevel?: LogLevel;
-
   /** Metric exporter. */
   exporter?: MetricExporter;
 
@@ -42,9 +35,7 @@ export interface MeterConfig {
 }
 
 /** Default Meter configuration. */
-export const DEFAULT_CONFIG = {
-  logLevel: getEnv().OTEL_LOG_LEVEL,
-};
+export const DEFAULT_CONFIG = {};
 
 /** The default metric creation options value. */
 export const DEFAULT_METRIC_OPTIONS = {

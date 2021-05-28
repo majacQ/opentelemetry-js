@@ -1,18 +1,18 @@
 {
   "name": "@opentelemetry/context-zone",
-  "version": "0.14.0",
+  "version": "0.19.0",
   "description": "OpenTelemetry Context Zone",
   "main": "build/src/index.js",
+  "module": "build/esm/index.js",
   "types": "build/src/index.d.ts",
   "repository": "open-telemetry/opentelemetry-js",
   "scripts": {
+    "compile": "tsc --build tsconfig.json tsconfig.esm.json",
+    "clean": "tsc --build --clean tsconfig.json tsconfig.esm.json",
     "lint": "eslint . --ext .ts",
     "lint:fix": "eslint . --ext .ts --fix",
-    "clean": "rimraf build/*",
-    "version:update": "node ../../scripts/version-update.js",
-    "compile": "npm run version:update && tsc -p .",
-    "prepare": "npm run compile",
-    "watch": "tsc -w"
+    "version": "node ../../scripts/version-update.js",
+    "watch": "tsc --build --watch tsconfig.json tsconfig.esm.json"
   },
   "keywords": [
     "opentelemetry",
@@ -28,6 +28,9 @@
     "node": ">=8.0.0"
   },
   "files": [
+    "build/esm/**/*.js",
+    "build/esm/**/*.js.map",
+    "build/esm/**/*.d.ts",
     "build/src/**/*.js",
     "build/src/**/*.js.map",
     "build/src/**/*.d.ts",
@@ -39,14 +42,13 @@
     "access": "public"
   },
   "devDependencies": {
-    "@babel/core": "7.12.10",
-    "@types/mocha": "8.2.0",
-    "@types/node": "14.14.12",
-    "@types/sinon": "9.0.9",
+    "@babel/core": "7.14.0",
+    "@types/mocha": "8.2.2",
+    "@types/node": "14.14.43",
+    "@types/sinon": "9.0.11",
     "@types/webpack-env": "1.16.0",
     "babel-loader": "8.2.2",
     "codecov": "3.8.1",
-    "gts": "2.0.2",
     "karma": "5.2.3",
     "karma-chrome-launcher": "3.1.0",
     "karma-mocha": "2.0.1",
@@ -55,17 +57,17 @@
     "mocha": "7.2.0",
     "nyc": "15.1.0",
     "rimraf": "3.0.2",
-    "sinon": "9.2.2",
-    "ts-loader": "8.0.12",
+    "sinon": "10.0.0",
+    "ts-loader": "8.2.0",
     "ts-mocha": "8.0.0",
     "ts-node": "9.1.1",
-    "typescript": "3.9.7",
-    "webpack": "4.44.2",
-    "webpack-cli": "4.2.0",
-    "webpack-merge": "5.6.1"
+    "typescript": "4.2.4",
+    "webpack": "4.46.0",
+    "webpack-cli": "4.6.0",
+    "webpack-merge": "5.7.3"
   },
   "dependencies": {
-    "@opentelemetry/context-zone-peer-dep": "^0.14.0",
+    "@opentelemetry/context-zone-peer-dep": "0.19.0",
     "zone.js": "^0.11.0"
   },
   "sideEffects": true

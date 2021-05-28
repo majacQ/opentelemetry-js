@@ -14,7 +14,8 @@
  * limitations under the License.
  */
 
-import { Logger, MeterProvider, TracerProvider } from '@opentelemetry/api';
+import { TracerProvider } from '@opentelemetry/api';
+import { MeterProvider } from '@opentelemetry/api-metrics';
 
 /** Interface Instrumentation to apply patch. */
 export interface Instrumentation {
@@ -43,6 +44,12 @@ export interface Instrumentation {
   /** Method to set meter provider  */
   setMeterProvider(meterProvider: MeterProvider): void;
 
+  /** Method to set instrumentation config  */
+  setConfig(config: InstrumentationConfig): void;
+
+  /** Method to get instrumentation config  */
+  getConfig(): InstrumentationConfig;
+
   /**
    * Contains all supported versions.
    * All versions must be compatible with [semver](https://semver.org/spec/v2.0.0.html) format.
@@ -58,8 +65,6 @@ export interface InstrumentationConfig {
    * @default true
    */
   enabled?: boolean;
-
-  logger?: Logger;
 
   /**
    * Path of the trace plugin to load.
